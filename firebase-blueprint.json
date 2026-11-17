@@ -1,0 +1,292 @@
+{
+  "entities": {
+    "SchoolUser": {
+      "title": "SchoolUser",
+      "description": "User account for Principal/Admin, Teacher, Fee Manager, or Student/Parent in DPS Etah ERP",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "role": { "type": "string", "enum": ["ADMIN", "TEACHER", "FEE_MANAGER", "STUDENT"] },
+        "userId": { "type": "string" },
+        "password": { "type": "string" },
+        "fullName": { "type": "string" },
+        "phone": { "type": "string" },
+        "wing": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "subject": { "type": "string" },
+        "parentName": { "type": "string" },
+        "monthlyTuition": { "type": "integer" },
+        "transportFee": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "role", "userId", "password", "fullName", "phone", "wing", "className", "section", "subject", "parentName", "monthlyTuition", "transportFee", "createdAt", "updatedAt"]
+    },
+    "GatewayConfig": {
+      "title": "GatewayConfig",
+      "description": "Official school UPI VPA, bank details, and optional Razorpay Key ID",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "merchantUpi": { "type": "string" },
+        "payeeName": { "type": "string" },
+        "bankName": { "type": "string" },
+        "accountNo": { "type": "string" },
+        "ifsc": { "type": "string" },
+        "razorpayKeyId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "merchantUpi", "payeeName", "bankName", "accountNo", "ifsc", "razorpayKeyId", "createdAt", "updatedAt"]
+    },
+    "Circular": {
+      "title": "Circular",
+      "description": "School circulars, teacher notices (broadcast or targeted to a specific person), holidays, and exam datesheets with optional photo/document attachments",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "audience": { "type": "string" },
+        "date": { "type": "string" },
+        "content": { "type": "string" },
+        "postedBy": { "type": "string" },
+        "recipientDocId": { "type": "string" },
+        "recipientName": { "type": "string" },
+        "senderRole": { "type": "string", "enum": ["ADMIN", "TEACHER"] },
+        "attachmentName": { "type": "string" },
+        "attachmentMimeType": { "type": "string" },
+        "attachmentData": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "title", "category", "audience", "date", "content", "postedBy", "recipientDocId", "recipientName", "senderRole", "attachmentName", "attachmentMimeType", "attachmentData", "createdAt", "updatedAt"]
+    },
+    "DptDaily": {
+      "title": "DptDaily",
+      "description": "Daily Practice Test (DPT) or Exam held/not-held status log per class and subject (max marks up to 100) with optional photo/document attachments",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "date": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "subject": { "type": "string" },
+        "assessmentType": { "type": "string", "enum": ["DPT", "EXAM"] },
+        "held": { "type": "boolean" },
+        "topic": { "type": "string" },
+        "maxMarks": { "type": "integer" },
+        "notes": { "type": "string" },
+        "reason": { "type": "string" },
+        "attachmentName": { "type": "string" },
+        "attachmentMimeType": { "type": "string" },
+        "attachmentData": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "date", "className", "section", "subject", "assessmentType", "held", "topic", "maxMarks", "notes", "reason", "attachmentName", "attachmentMimeType", "attachmentData", "teacherId", "teacherName", "createdAt", "updatedAt"]
+    },
+    "DptWeekly": {
+      "title": "DptWeekly",
+      "description": "Weekly DPT subject marks per student",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "week": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "subject": { "type": "string" },
+        "studentDocId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "admissionNo": { "type": "string" },
+        "scored": { "type": "integer" },
+        "maxMarks": { "type": "integer" },
+        "teacherId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "week", "className", "section", "subject", "studentDocId", "studentName", "admissionNo", "scored", "maxMarks", "teacherId", "createdAt", "updatedAt"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Daily attendance status for a student",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "date": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "studentDocId": { "type": "string" },
+        "status": { "type": "string", "enum": ["Present", "Absent", "Leave"] },
+        "markedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "date", "className", "section", "studentDocId", "status", "markedBy", "createdAt", "updatedAt"]
+    },
+    "LeaveRequest": {
+      "title": "LeaveRequest",
+      "description": "Student leave application",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "studentDocId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "admissionNo": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "fromDate": { "type": "string" },
+        "toDate": { "type": "string" },
+        "reason": { "type": "string" },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"] },
+        "teacherRemark": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "studentDocId", "studentName", "admissionNo", "className", "section", "fromDate", "toDate", "reason", "status", "teacherRemark", "createdAt", "updatedAt"]
+    },
+    "HomeworkItem": {
+      "title": "HomeworkItem",
+      "description": "Daily homework diary entry",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "subject": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "dueDate": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "className", "section", "subject", "title", "description", "dueDate", "teacherName", "createdAt", "updatedAt"]
+    },
+    "TermMarkCard": {
+      "title": "TermMarkCard",
+      "description": "Term examination report card",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "term": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "studentDocId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "admissionNo": { "type": "string" },
+        "marks": { "type": "object" },
+        "remarks": { "type": "string" },
+        "publishedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "term", "className", "section", "studentDocId", "studentName", "admissionNo", "marks", "remarks", "publishedBy", "createdAt", "updatedAt"]
+    },
+    "FeeItem": {
+      "title": "FeeItem",
+      "description": "Individual student fee billing line item",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "studentDocId": { "type": "string" },
+        "title": { "type": "string" },
+        "month": { "type": "string" },
+        "amount": { "type": "integer" },
+        "status": { "type": "string", "enum": ["UNPAID", "PENDING_VERIFICATION", "PAID"] },
+        "paymentId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "studentDocId", "title", "month", "amount", "status", "paymentId", "createdAt", "updatedAt"]
+    },
+    "FeePayment": {
+      "title": "FeePayment",
+      "description": "Student UPI/Razorpay payment proof and verified receipt record",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "studentDocId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "admissionNo": { "type": "string" },
+        "className": { "type": "string" },
+        "feeItemIds": { "type": "array" },
+        "feeSummary": { "type": "string" },
+        "amount": { "type": "integer" },
+        "mode": { "type": "string", "enum": ["UPI", "RAZORPAY"] },
+        "utrOrRef": { "type": "string" },
+        "upiApp": { "type": "string" },
+        "status": { "type": "string", "enum": ["PENDING", "VERIFIED", "REJECTED"] },
+        "receiptNo": { "type": "string" },
+        "rejectReason": { "type": "string" },
+        "verifiedBy": { "type": "string" },
+        "verifiedAtStr": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "studentDocId", "studentName", "admissionNo", "className", "feeItemIds", "feeSummary", "amount", "mode", "utrOrRef", "upiApp", "status", "receiptNo", "rejectReason", "verifiedBy", "verifiedAtStr", "createdAt", "updatedAt"]
+    },
+    "DoubtMessage": {
+      "title": "DoubtMessage",
+      "description": "Parent-Teacher helpdesk / student academic doubt",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "studentDocId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "className": { "type": "string" },
+        "subject": { "type": "string" },
+        "message": { "type": "string" },
+        "reply": { "type": "string" },
+        "repliedBy": { "type": "string" },
+        "status": { "type": "string", "enum": ["OPEN", "REPLIED"] },
+        "dateLabel": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "studentDocId", "studentName", "className", "subject", "message", "reply", "repliedBy", "status", "dateLabel", "createdAt", "updatedAt"]
+    },
+    "CraftProject": {
+      "title": "CraftProject",
+      "description": "Student and teacher craft ideas & project skills with school AI-generated concept imagery",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "description": { "type": "string" },
+        "materials": { "type": "string" },
+        "authorDocId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorUserId": { "type": "string" },
+        "authorRole": { "type": "string", "enum": ["STUDENT", "TEACHER", "ADMIN"] },
+        "classInfo": { "type": "string" },
+        "dateLabel": { "type": "string" },
+        "aiImageData": { "type": "string" },
+        "aiPromptUsed": { "type": "string" },
+        "likesCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "title", "category", "description", "materials", "authorDocId", "authorName", "authorUserId", "authorRole", "classInfo", "dateLabel", "aiImageData", "aiPromptUsed", "likesCount", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/accounts/{ownerUid}/users/{docId}": { "schema": { "$ref": "#/entities/SchoolUser" }, "description": "All school user accounts for an authenticated school portal" },
+    "/accounts/{ownerUid}/gatewayConfig/{docId}": { "schema": { "$ref": "#/entities/GatewayConfig" }, "description": "Payment gateway settings" },
+    "/accounts/{ownerUid}/circulars/{docId}": { "schema": { "$ref": "#/entities/Circular" }, "description": "Principal circulars and targeted teacher notices" },
+    "/accounts/{ownerUid}/dptDaily/{docId}": { "schema": { "$ref": "#/entities/DptDaily" }, "description": "Daily DPT and Exam logs" },
+    "/accounts/{ownerUid}/dptWeekly/{docId}": { "schema": { "$ref": "#/entities/DptWeekly" }, "description": "Weekly DPT scores" },
+    "/accounts/{ownerUid}/attendance/{docId}": { "schema": { "$ref": "#/entities/AttendanceRecord" }, "description": "Student attendance" },
+    "/accounts/{ownerUid}/leaves/{docId}": { "schema": { "$ref": "#/entities/LeaveRequest" }, "description": "Student leave requests" },
+    "/accounts/{ownerUid}/homework/{docId}": { "schema": { "$ref": "#/entities/HomeworkItem" }, "description": "Daily homework diary" },
+    "/accounts/{ownerUid}/termMarks/{docId}": { "schema": { "$ref": "#/entities/TermMarkCard" }, "description": "Term exam marks" },
+    "/accounts/{ownerUid}/feeItems/{docId}": { "schema": { "$ref": "#/entities/FeeItem" }, "description": "Student fee line items" },
+    "/accounts/{ownerUid}/payments/{docId}": { "schema": { "$ref": "#/entities/FeePayment" }, "description": "Fee payment proofs and receipts" },
+    "/accounts/{ownerUid}/doubts/{docId}": { "schema": { "$ref": "#/entities/DoubtMessage" }, "description": "Parent-Teacher doubt box" },
+    "/accounts/{ownerUid}/craftProjects/{docId}": { "schema": { "$ref": "#/entities/CraftProject" }, "description": "Student & teacher craft ideas and project skills with AI-generated visuals" }
+  }
+}

@@ -1,0 +1,454 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isOwner(ownerUid) {
+      return isSignedIn() && request.auth.uid == ownerUid;
+    }
+
+    function isValidTimestampsCreate() {
+      return incoming().createdAt is timestamp &&
+             incoming().createdAt <= request.time &&
+             incoming().updatedAt is timestamp &&
+             incoming().updatedAt <= request.time;
+    }
+
+    function isValidTimestampsUpdate() {
+      return incoming().createdAt == existing().createdAt &&
+             incoming().updatedAt is timestamp &&
+             incoming().updatedAt <= request.time;
+    }
+
+    function isValidSchoolUser(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.role in ['ADMIN', 'TEACHER', 'FEE_MANAGER', 'STUDENT'] &&
+             data.userId is string && data.userId.size() >= 2 && data.userId.size() <= 40 &&
+             data.password is string && data.password.size() >= 1 && data.password.size() <= 64 &&
+             data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 100 &&
+             data.phone is string && data.phone.size() <= 30 &&
+             data.wing is string && data.wing.size() <= 50 &&
+             data.className is string && data.className.size() <= 30 &&
+             data.section is string && data.section.size() <= 10 &&
+             data.subject is string && data.subject.size() <= 60 &&
+             data.parentName is string && data.parentName.size() <= 100 &&
+             data.monthlyTuition is int && data.monthlyTuition >= 0 &&
+             data.transportFee is int && data.transportFee >= 0;
+    }
+
+    function isValidGatewayConfig(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.merchantUpi is string && data.merchantUpi.size() >= 1 && data.merchantUpi.size() <= 100 &&
+             data.payeeName is string && data.payeeName.size() >= 1 && data.payeeName.size() <= 100 &&
+             data.bankName is string && data.bankName.size() <= 120 &&
+             data.accountNo is string && data.accountNo.size() <= 40 &&
+             data.ifsc is string && data.ifsc.size() <= 20 &&
+             data.razorpayKeyId is string && data.razorpayKeyId.size() <= 80;
+    }
+
+    function isValidCircular(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 150 &&
+             data.category is string && data.category.size() >= 1 && data.category.size() <= 40 &&
+             data.audience is string && data.audience.size() >= 1 && data.audience.size() <= 120 &&
+             data.date is string && data.date.size() >= 1 && data.date.size() <= 20 &&
+             data.content is string && data.content.size() >= 1 && data.content.size() <= 2000 &&
+             data.postedBy is string && data.postedBy.size() >= 1 && data.postedBy.size() <= 100 &&
+             data.get('recipientDocId', '') is string && data.get('recipientDocId', '').size() <= 128 &&
+             data.get('recipientName', '') is string && data.get('recipientName', '').size() <= 120 &&
+             data.get('senderRole', 'ADMIN') in ['ADMIN', 'TEACHER'] &&
+             data.get('attachmentName', '') is string && data.get('attachmentName', '').size() <= 160 &&
+             data.get('attachmentMimeType', '') is string && data.get('attachmentMimeType', '').size() <= 120 &&
+             data.get('attachmentData', '') is string && data.get('attachmentData', '').size() <= 450000;
+    }
+
+    function isValidDptDaily(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.date is string && data.date.size() >= 1 && data.date.size() <= 20 &&
+             data.className is string && data.className.size() >= 1 && data.className.size() <= 30 &&
+             data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+             data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 60 &&
+             data.get('assessmentType', 'DPT') in ['DPT', 'EXAM'] &&
+             data.held is bool &&
+             data.topic is string && data.topic.size() <= 200 &&
+             data.maxMarks is int && data.maxMarks >= 0 && data.maxMarks <= 100 &&
+             data.notes is string && data.notes.size() <= 1000 &&
+             data.reason is string && data.reason.size() <= 200 &&
+             data.get('attachmentName', '') is string && data.get('attachmentName', '').size() <= 160 &&
+             data.get('attachmentMimeType', '') is string && data.get('attachmentMimeType', '').size() <= 120 &&
+             data.get('attachmentData', '') is string && data.get('attachmentData', '').size() <= 450000 &&
+             data.teacherId is string && data.teacherId.size() >= 1 && data.teacherId.size() <= 40 &&
+             data.teacherName is string && data.teacherName.size() >= 1 && data.teacherName.size() <= 100;
+    }
+
+    function isValidDptWeekly(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.week is string && data.week.size() >= 1 && data.week.size() <= 50 &&
+             data.className is string && data.className.size() >= 1 && data.className.size() <= 30 &&
+             data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+             data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 60 &&
+             data.studentDocId is string && data.studentDocId.size() >= 1 && data.studentDocId.size() <= 128 &&
+             data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 100 &&
+             data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 40 &&
+             data.scored is int && data.scored >= 0 &&
+             data.maxMarks is int && data.maxMarks >= 1 &&
+             data.teacherId is string && data.teacherId.size() >= 1 && data.teacherId.size() <= 40;
+    }
+
+    function isValidAttendance(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.date is string && data.date.size() >= 1 && data.date.size() <= 20 &&
+             data.className is string && data.className.size() >= 1 && data.className.size() <= 30 &&
+             data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+             data.studentDocId is string && data.studentDocId.size() >= 1 && data.studentDocId.size() <= 128 &&
+             data.status in ['Present', 'Absent', 'Leave'] &&
+             data.markedBy is string && data.markedBy.size() >= 1 && data.markedBy.size() <= 40;
+    }
+
+    function isValidLeave(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.studentDocId is string && data.studentDocId.size() >= 1 && data.studentDocId.size() <= 128 &&
+             data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 100 &&
+             data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 40 &&
+             data.className is string && data.className.size() >= 1 && data.className.size() <= 30 &&
+             data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+             data.fromDate is string && data.fromDate.size() >= 1 && data.fromDate.size() <= 20 &&
+             data.toDate is string && data.toDate.size() >= 1 && data.toDate.size() <= 20 &&
+             data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 500 &&
+             data.status in ['Pending', 'Approved', 'Rejected'] &&
+             data.teacherRemark is string && data.teacherRemark.size() <= 300;
+    }
+
+    function isValidHomework(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.className is string && data.className.size() >= 1 && data.className.size() <= 30 &&
+             data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+             data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 60 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 150 &&
+             data.description is string && data.description.size() >= 1 && data.description.size() <= 1500 &&
+             data.dueDate is string && data.dueDate.size() >= 1 && data.dueDate.size() <= 20 &&
+             data.teacherName is string && data.teacherName.size() >= 1 && data.teacherName.size() <= 100;
+    }
+
+    function isValidTermMark(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.term is string && data.term.size() >= 1 && data.term.size() <= 60 &&
+             data.className is string && data.className.size() >= 1 && data.className.size() <= 30 &&
+             data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+             data.studentDocId is string && data.studentDocId.size() >= 1 && data.studentDocId.size() <= 128 &&
+             data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 100 &&
+             data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 40 &&
+             data.marks is map &&
+             data.remarks is string && data.remarks.size() <= 500 &&
+             data.publishedBy is string && data.publishedBy.size() >= 1 && data.publishedBy.size() <= 100;
+    }
+
+    function isValidFeeItem(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.studentDocId is string && data.studentDocId.size() >= 1 && data.studentDocId.size() <= 128 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.month is string && data.month.size() >= 1 && data.month.size() <= 40 &&
+             data.amount is int && data.amount >= 0 &&
+             data.status in ['UNPAID', 'PENDING_VERIFICATION', 'PAID'] &&
+             data.paymentId is string && data.paymentId.size() <= 128;
+    }
+
+    function isValidFeePayment(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.studentDocId is string && data.studentDocId.size() >= 1 && data.studentDocId.size() <= 128 &&
+             data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 100 &&
+             data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 40 &&
+             data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+             data.feeItemIds is list && data.feeItemIds.size() <= 30 &&
+             (data.feeItemIds.size() == 0 || data.feeItemIds[0] is string) &&
+             data.feeSummary is string && data.feeSummary.size() >= 1 && data.feeSummary.size() <= 500 &&
+             data.amount is int && data.amount > 0 &&
+             data.mode in ['UPI', 'RAZORPAY'] &&
+             data.utrOrRef is string && data.utrOrRef.size() >= 1 && data.utrOrRef.size() <= 80 &&
+             data.upiApp is string && data.upiApp.size() <= 50 &&
+             data.status in ['PENDING', 'VERIFIED', 'REJECTED'] &&
+             data.receiptNo is string && data.receiptNo.size() <= 60 &&
+             data.rejectReason is string && data.rejectReason.size() <= 300 &&
+             data.verifiedBy is string && data.verifiedBy.size() <= 100 &&
+             data.verifiedAtStr is string && data.verifiedAtStr.size() <= 60;
+    }
+
+    function isValidDoubt(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.studentDocId is string && data.studentDocId.size() >= 1 && data.studentDocId.size() <= 128 &&
+             data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 100 &&
+             data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+             data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 60 &&
+             data.message is string && data.message.size() >= 1 && data.message.size() <= 1000 &&
+             data.reply is string && data.reply.size() <= 1000 &&
+             data.repliedBy is string && data.repliedBy.size() <= 100 &&
+             data.status in ['OPEN', 'REPLIED'] &&
+             data.dateLabel is string && data.dateLabel.size() >= 1 && data.dateLabel.size() <= 20;
+    }
+
+    function isValidCraftProject(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 150 &&
+             data.category is string && data.category.size() >= 1 && data.category.size() <= 50 &&
+             data.description is string && data.description.size() >= 1 && data.description.size() <= 1500 &&
+             data.materials is string && data.materials.size() <= 500 &&
+             data.authorDocId is string && data.authorDocId.size() <= 128 &&
+             data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 100 &&
+             data.authorUserId is string && data.authorUserId.size() <= 40 &&
+             data.authorRole in ['STUDENT', 'TEACHER', 'ADMIN'] &&
+             data.classInfo is string && data.classInfo.size() <= 80 &&
+             data.dateLabel is string && data.dateLabel.size() >= 1 && data.dateLabel.size() <= 20 &&
+             data.aiImageData is string && data.aiImageData.size() <= 460000 &&
+             data.aiPromptUsed is string && data.aiPromptUsed.size() <= 600 &&
+             data.likesCount is int && data.likesCount >= 0;
+    }
+
+    match /accounts/{ownerUid} {
+      match /users/{docId} {
+        allow list: if isOwner(ownerUid);
+        allow get: if isValidId(docId) && isOwner(ownerUid);
+        allow create: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == ownerUid &&
+          incoming().keys().hasAll(['ownerUid', 'role', 'userId', 'password', 'fullName', 'phone', 'wing', 'className', 'section', 'subject', 'parentName', 'monthlyTuition', 'transportFee', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'role', 'userId', 'password', 'fullName', 'phone', 'wing', 'className', 'section', 'subject', 'parentName', 'monthlyTuition', 'transportFee', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidSchoolUser(incoming());
+        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          isValidTimestampsUpdate() &&
+          isValidSchoolUser(incoming()) &&
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'phone', 'password', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'userId', 'password', 'fullName', 'phone', 'wing', 'className', 'section', 'subject', 'parentName', 'monthlyTuition', 'transportFee', 'updatedAt'])
+          );
+        allow delete: if isOwner(ownerUid) && isValidId(docId);
+      }
+
+      match /gatewayConfig/{docId} {
+        allow list: if isOwner(ownerUid);
+        allow get: if isValidId(docId) && isOwner(ownerUid);
+        allow create: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == ownerUid &&
+          incoming().keys().hasAll(['ownerUid', 'merchantUpi', 'payeeName', 'bankName', 'accountNo', 'ifsc', 'razorpayKeyId', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'merchantUpi', 'payeeName', 'bankName', 'accountNo', 'ifsc', 'razorpayKeyId', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidGatewayConfig(incoming());
+        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          isValidTimestampsUpdate() &&
+          isValidGatewayConfig(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['merchantUpi', 'payeeName', 'bankName', 'accountNo', 'ifsc', 'razorpayKeyId', 'updatedAt']);
+        allow delete: if isOwner(ownerUid) && isValidId(docId);
+      }
+
+      match /circulars/{docId} {
+        allow list: if isOwner(ownerUid);
+        allow get: if isValidId(docId) && isOwner(ownerUid);
+        allow create: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == ownerUid &&
+          incoming().keys().hasAll(['ownerUid', 'title', 'category', 'audience', 'date', 'content', 'postedBy', 'recipientDocId', 'recipientName', 'senderRole', 'attachmentName', 'attachmentMimeType', 'attachmentData', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'title', 'category', 'audience', 'date', 'content', 'postedBy', 'recipientDocId', 'recipientName', 'senderRole', 'attachmentName', 'attachmentMimeType', 'attachmentData', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidCircular(incoming());
+        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          isValidTimestampsUpdate() &&
+          isValidCircular(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'category', 'audience', 'date', 'content', 'postedBy', 'recipientDocId', 'recipientName', 'senderRole', 'attachmentName', 'attachmentMimeType', 'attachmentData', 'updatedAt']);
+        allow delete: if isOwner(ownerUid) && isValidId(docId);
+      }
+
+      match /dptDaily/{docId} {
+        allow list: if isOwner(ownerUid);
+        allow get: if isValidId(docId) && isOwner(ownerUid);
+        allow create: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == ownerUid &&
+          incoming().keys().hasAll(['ownerUid', 'date', 'className', 'section', 'subject', 'assessmentType', 'held', 'topic', 'maxMarks', 'notes', 'reason', 'attachmentName', 'attachmentMimeType', 'attachmentData', 'teacherId', 'teacherName', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'date', 'className', 'section', 'subject', 'assessmentType', 'held', 'topic', 'maxMarks', 'notes', 'reason', 'attachmentName', 'attachmentMimeType', 'attachmentData', 'teacherId', 'teacherName', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidDptDaily(incoming());
+        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          isValidTimestampsUpdate() &&
+          isValidDptDaily(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['assessmentType', 'held', 'topic', 'maxMarks', 'notes', 'reason', 'attachmentName', 'attachmentMimeType', 'attachmentData', 'teacherId', 'teacherName', 'updatedAt']);
+        allow delete: if isOwner(ownerUid) && isValidId(docId);
+      }
+
+      match /dptWeekly/{docId} {
+        allow list: if isOwner(ownerUid);
+        allow get: if isValidId(docId) && isOwner(ownerUid);
+        allow create: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == ownerUid &&
+          incoming().keys().hasAll(['ownerUid', 'week', 'className', 'section', 'subject', 'studentDocId', 'studentName', 'admissionNo', 'scored', 'maxMarks', 'teacherId', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'week', 'className', 'section', 'subject', 'studentDocId', 'studentName', 'admissionNo', 'scored', 'maxMarks', 'teacherId', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidDptWeekly(incoming());
+        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          isValidTimestampsUpdate() &&
+          isValidDptWeekly(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['scored', 'maxMarks', 'teacherId', 'updatedAt']);
+        allow delete: if isOwner(ownerUid) && isValidId(docId);
+      }
+
+      match /attendance/{docId} {
+        allow list: if isOwner(ownerUid);
+        allow get: if isValidId(docId) && isOwner(ownerUid);
+        allow create: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == ownerUid &&
+          incoming().keys().hasAll(['ownerUid', 'date', 'className', 'section', 'studentDocId', 'status', 'markedBy', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'date', 'className', 'section', 'studentDocId', 'status', 'markedBy', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidAttendance(incoming());
+        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          isValidTimestampsUpdate() &&
+          isValidAttendance(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'markedBy', 'updatedAt']);
+        allow delete: if isOwner(ownerUid) && isValidId(docId);
+      }
+
+      match /leaves/{docId} {
+        allow list: if isOwner(ownerUid);
+        allow get: if isValidId(docId) && isOwner(ownerUid);
+        allow create: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == ownerUid &&
+          incoming().keys().hasAll(['ownerUid', 'studentDocId', 'studentName', 'admissionNo', 'className', 'section', 'fromDate', 'toDate', 'reason', 'status', 'teacherRemark', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'studentDocId', 'studentName', 'admissionNo', 'className', 'section', 'fromDate', 'toDate', 'reason', 'status', 'teacherRemark', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidLeave(incoming());
+        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          existing().status == 'Pending' &&
+          isValidTimestampsUpdate() &&
+          isValidLeave(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'teacherRemark', 'updatedAt']);
+        allow delete: if isOwner(ownerUid) && isValidId(docId);
+      }
+
+      match /homework/{docId} {
+        allow list: if isOwner(ownerUid);
+        allow get: if isValidId(docId) && isOwner(ownerUid);
+        allow create: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == ownerUid &&
+          incoming().keys().hasAll(['ownerUid', 'className', 'section', 'subject', 'title', 'description', 'dueDate', 'teacherName', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'className', 'section', 'subject', 'title', 'description', 'dueDate', 'teacherName', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidHomework(incoming());
+        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          isValidTimestampsUpdate() &&
+          isValidHomework(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'dueDate', 'updatedAt']);
+        allow delete: if isOwner(ownerUid) && isValidId(docId);
+      }
+
+      match /termMarks/{docId} {
+        allow list: if isOwner(ownerUid);
+        allow get: if isValidId(docId) && isOwner(ownerUid);
+        allow create: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == ownerUid &&
+          incoming().keys().hasAll(['ownerUid', 'term', 'className', 'section', 'studentDocId', 'studentName', 'admissionNo', 'marks', 'remarks', 'publishedBy', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'term', 'className', 'section', 'studentDocId', 'studentName', 'admissionNo', 'marks', 'remarks', 'publishedBy', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidTermMark(incoming());
+        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          isValidTimestampsUpdate() &&
+          isValidTermMark(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['marks', 'remarks', 'publishedBy', 'updatedAt']);
+        allow delete: if isOwner(ownerUid) && isValidId(docId);
+      }
+
+      match /feeItems/{docId} {
+        allow list: if isOwner(ownerUid);
+        allow get: if isValidId(docId) && isOwner(ownerUid);
+        allow create: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == ownerUid &&
+          incoming().keys().hasAll(['ownerUid', 'studentDocId', 'title', 'month', 'amount', 'status', 'paymentId', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'studentDocId', 'title', 'month', 'amount', 'status', 'paymentId', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidFeeItem(incoming());
+        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          existing().status != 'PAID' &&
+          isValidTimestampsUpdate() &&
+          isValidFeeItem(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paymentId', 'updatedAt']);
+        allow delete: if isOwner(ownerUid) && isValidId(docId) && existing().status == 'UNPAID';
+      }
+
+      match /payments/{docId} {
+        allow list: if isOwner(ownerUid);
+        allow get: if isValidId(docId) && isOwner(ownerUid);
+        allow create: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == ownerUid &&
+          incoming().keys().hasAll(['ownerUid', 'studentDocId', 'studentName', 'admissionNo', 'className', 'feeItemIds', 'feeSummary', 'amount', 'mode', 'utrOrRef', 'upiApp', 'status', 'receiptNo', 'rejectReason', 'verifiedBy', 'verifiedAtStr', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'studentDocId', 'studentName', 'admissionNo', 'className', 'feeItemIds', 'feeSummary', 'amount', 'mode', 'utrOrRef', 'upiApp', 'status', 'receiptNo', 'rejectReason', 'verifiedBy', 'verifiedAtStr', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidFeePayment(incoming());
+        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          existing().status == 'PENDING' &&
+          isValidTimestampsUpdate() &&
+          isValidFeePayment(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'receiptNo', 'rejectReason', 'verifiedBy', 'verifiedAtStr', 'updatedAt']);
+        allow delete: if isOwner(ownerUid) && isValidId(docId);
+      }
+
+      match /doubts/{docId} {
+        allow list: if isOwner(ownerUid);
+        allow get: if isValidId(docId) && isOwner(ownerUid);
+        allow create: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == ownerUid &&
+          incoming().keys().hasAll(['ownerUid', 'studentDocId', 'studentName', 'className', 'subject', 'message', 'reply', 'repliedBy', 'status', 'dateLabel', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'studentDocId', 'studentName', 'className', 'subject', 'message', 'reply', 'repliedBy', 'status', 'dateLabel', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidDoubt(incoming());
+        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          isValidTimestampsUpdate() &&
+          isValidDoubt(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['reply', 'repliedBy', 'status', 'updatedAt']);
+        allow delete: if isOwner(ownerUid) && isValidId(docId);
+      }
+
+      match /craftProjects/{docId} {
+        allow list: if isOwner(ownerUid);
+        allow get: if isValidId(docId) && isOwner(ownerUid);
+        allow create: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == ownerUid &&
+          incoming().keys().hasAll(['ownerUid', 'title', 'category', 'description', 'materials', 'authorDocId', 'authorName', 'authorUserId', 'authorRole', 'classInfo', 'dateLabel', 'aiImageData', 'aiPromptUsed', 'likesCount', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'title', 'category', 'description', 'materials', 'authorDocId', 'authorName', 'authorUserId', 'authorRole', 'classInfo', 'dateLabel', 'aiImageData', 'aiPromptUsed', 'likesCount', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidCraftProject(incoming());
+        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          isValidTimestampsUpdate() &&
+          isValidCraftProject(incoming()) &&
+          incoming().likesCount >= existing().likesCount &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['aiImageData', 'aiPromptUsed', 'likesCount', 'updatedAt']);
+        allow delete: if isOwner(ownerUid) && isValidId(docId);
+      }
+    }
+  }
+}

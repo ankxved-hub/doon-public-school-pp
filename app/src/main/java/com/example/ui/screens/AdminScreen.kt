@@ -1,0 +1,1127 @@
+package com.example.ui.screens
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import com.example.R
+import com.example.data.model.*
+import com.example.ui.components.AttachmentPreviewBlock
+import com.example.ui.components.StatMetricCard
+import com.example.ui.components.StudentDptResultCard
+import com.example.ui.components.formatInr
+import com.example.ui.theme.*
+import com.example.ui.viewmodel.CraftAiImageState
+
+@Composable
+fun AdminScreen(
+    activeTab: Int,
+    adminUser: SchoolUser,
+    users: List<SchoolUser>,
+    gateway: GatewayConfig,
+    circulars: List<Circular>,
+    dptDaily: List<DptDaily>,
+    dptWeekly: List<DptWeekly>,
+    termMarks: List<TermMarkCard>,
+    attendance: List<AttendanceRecord>,
+    feeItems: List<FeeItem>,
+    payments: List<FeePayment>,
+    craftProjects: List<CraftProject> = emptyList(),
+    craftAiImageState: CraftAiImageState = CraftAiImageState.Idle,
+    generatingCraftPostId: String? = null,
+    onSaveUser: (SchoolUser) -> Unit,
+    onDeleteRecord: (collection: String, docId: String, label: String) -> Unit,
+    onPostCircular: (Circular) -> Unit,
+    onGenerateCraftAiImage: (String, String, String, String) -> Unit = { _, _, _, _ -> },
+    onClearCraftPreview: () -> Unit = {},
+    onPublishCraftProject: (CraftProject) -> Unit = {},
+    onGenerateCraftImageForPost: (CraftProject) -> Unit = {},
+    onApplaudCraftProject: (CraftProject) -> Unit = {},
+    onNavigateToTab: (Int) -> Unit = {},
+    onShowMessage: (String) -> Unit = {},
+    onOpenProfileEdit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val today = remember { SchoolCatalog.todayIso() }
+    val students = remember(users) { users.filter { it.role == "STUDENT" }.sortedBy { it.userId } }
+    val teachers = remember(users) { users.filter { it.role == "TEACHER" } }
+    val feeManagers = remember(users) { users.filter { it.role == "FEE_MANAGER" } }
+    var showStudentProgressDashboard by remember { mutableStateOf(false) }
+
+    if (showStudentProgressDashboard && students.isNotEmpty()) {
+        BackHandler { showStudentProgressDashboard = false }
+        DptResultDashboardScreen(
+            primaryStudent = students.first(),
+            allStudents = students,
+            dptDaily = dptDaily,
+            dptWeekly = dptWeekly,
+            termMarks = termMarks,
+            allowStudentPicker = true,
+            onBack = { showStudentProgressDashboard = false },
+            onShowMessage = onShowMessage,
+            modifier = modifier,
+        )
+        return
+    }
+
+    when (activeTab) {
+        0 -> AdminDashboardTab(
+            adminUser = adminUser,
+            students = students,
+            teachers = teachers,
+            feeManagers = feeManagers,
+            gateway = gateway,
+            todayDpts = dptDaily.filter { it.date == today },
+            dptWeekly = dptWeekly,
+            todayAttendance = attendance.filter { it.date == today },
+            feeItems = feeItems,
+            payments = payments,
+            onOpenProgressDashboard = { showStudentProgressDashboard = true },
+            onOpenFeePayments = { onNavigateToTab(3) },
+            onOpenCraftStudio = { onNavigateToTab(4) },
+            onShowMessage = onShowMessage,
+            onOpenProfileEdit = onOpenProfileEdit,
+            modifier = modifier,
+        )
+        1 -> AdminAccountsTab(
+            users = users,
+            onSaveUser = onSaveUser,
+            onDeleteUser = { user -> onDeleteRecord("users", user.id, user.fullName) },
+            modifier = modifier,
+        )
+        2 -> AdminCircularsTab(
+            adminUser = adminUser,
+            circulars = circulars,
+            onPostCircular = onPostCircular,
+            onDeleteCircular = { c -> onDeleteRecord("circulars", c.id, c.title) },
+            onShowMessage = onShowMessage,
+            modifier = modifier,
+        )
+        3 -> FeePaymentsScreen(
+            payments = payments,
+            feeItems = feeItems,
+            students = students,
+            isStudentView = false,
+            modifier = modifier,
+        )
+        else -> CraftStudioScreen(
+            currentUser = adminUser,
+            projects = craftProjects,
+            craftAiImageState = craftAiImageState,
+            generatingPostId = generatingCraftPostId,
+            onGeneratePreviewImage = onGenerateCraftAiImage,
+            onClearPreviewImage = onClearCraftPreview,
+            onPublishProject = onPublishCraftProject,
+            onGenerateImageForPost = onGenerateCraftImageForPost,
+            onApplaudPost = onApplaudCraftProject,
+            onDeletePost = { p -> onDeleteRecord("craftProjects", p.id, p.title) },
+            onShowMessage = onShowMessage,
+            modifier = modifier,
+        )
+    }
+}
+
+@Composable
+private fun AdminDashboardTab(
+    adminUser: SchoolUser,
+    students: List<SchoolUser>,
+    teachers: List<SchoolUser>,
+    feeManagers: List<SchoolUser>,
+    gateway: GatewayConfig,
+    todayDpts: List<DptDaily>,
+    dptWeekly: List<DptWeekly>,
+    todayAttendance: List<AttendanceRecord>,
+    feeItems: List<FeeItem>,
+    payments: List<FeePayment>,
+    onOpenProgressDashboard: () -> Unit,
+    onOpenFeePayments: () -> Unit,
+    onOpenCraftStudio: () -> Unit,
+    onShowMessage: (String) -> Unit,
+    onOpenProfileEdit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val presentToday = todayAttendance.count { it.status == "Present" }
+    val attendancePct = if (todayAttendance.isNotEmpty()) {
+        (presentToday * 100) / todayAttendance.size
+    } else 0
+
+    val dptHeldCount = todayDpts.count { it.held }
+    val dptCompliancePct = if (todayDpts.isNotEmpty()) {
+        (dptHeldCount * 100) / todayDpts.size
+    } else 0
+
+    val totalCollected = feeItems.filter { it.status == "PAID" }.sumOf { it.amount }
+    val totalPending = feeItems.filter { it.status != "PAID" }.sumOf { it.amount }
+    val pendingVerificationCount = payments.count { it.status == "PENDING" }
+
+    var selectedWeek by remember { mutableStateOf(SchoolCatalog.dptWeeks[1]) }
+    var zoomPosterResId by remember { mutableStateOf<Int?>(null) }
+    var zoomPosterTitle by remember { mutableStateOf("") }
+
+    val studentDptRanked = remember(students, dptWeekly, selectedWeek) {
+        students.map { st ->
+            val entries = dptWeekly.filter { it.studentDocId == st.id && it.week == selectedWeek }
+            val max = entries.sumOf { it.maxMarks }
+            val pct = if (max > 0L) (entries.sumOf { it.scored } * 100.0) / max else -1.0
+            Triple(st, entries, pct)
+        }.sortedByDescending { it.third }
+    }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        // Principal Profile Banner
+        item {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = NavyDeep),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("PRINCIPAL COMMAND CENTER", style = MaterialTheme.typography.labelSmall, color = GoldAmber)
+                        Spacer(Modifier.height(4.dp))
+                        Text(adminUser.fullName, style = MaterialTheme.typography.titleLarge, color = Color.White)
+                        Text(
+                            "ID: ${adminUser.userId} • Phone: ${adminUser.phone}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.8f),
+                        )
+                    }
+                    FilledTonalButton(
+                        onClick = onOpenProfileEdit,
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = GoldAmber,
+                            contentColor = NavyDeep,
+                        ),
+                        modifier = Modifier.testTag("admin_edit_profile_btn"),
+                    ) {
+                        Icon(Icons.Filled.Edit, contentDescription = "Edit Profile", modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Edit Profile")
+                    }
+                }
+            }
+        }
+
+        // Live Counters
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                StatMetricCard(
+                    title = "Total Students",
+                    value = "${students.size}",
+                    subtitle = "Nursery to XII",
+                    icon = Icons.Filled.School,
+                    accentColor = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f),
+                )
+                StatMetricCard(
+                    title = "Staff & Accounts",
+                    value = "${teachers.size + feeManagers.size}",
+                    subtitle = "${teachers.size} Teachers • ${feeManagers.size} Fee Mgr",
+                    icon = Icons.Filled.Groups,
+                    accentColor = IndigoAccent,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                StatMetricCard(
+                    title = "Today Attendance",
+                    value = "$attendancePct%",
+                    subtitle = "$presentToday/${todayAttendance.size} marked present",
+                    icon = Icons.Filled.FactCheck,
+                    accentColor = EmeraldSuccess,
+                    modifier = Modifier.weight(1f),
+                )
+                StatMetricCard(
+                    title = "DPT Compliance",
+                    value = "$dptCompliancePct%",
+                    subtitle = "$dptHeldCount/${todayDpts.size} DPTs held today",
+                    icon = Icons.Filled.Quiz,
+                    accentColor = GoldAmberDark,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                StatMetricCard(
+                    title = "Fee Collected",
+                    value = formatInr(totalCollected),
+                    subtitle = "Verified receipts",
+                    icon = Icons.Filled.AccountBalanceWallet,
+                    accentColor = EmeraldSuccess,
+                    modifier = Modifier.weight(1f),
+                )
+                StatMetricCard(
+                    title = "Pending Dues",
+                    value = formatInr(totalPending),
+                    subtitle = "$pendingVerificationCount UTR pending verify",
+                    icon = Icons.Filled.PendingActions,
+                    accentColor = RoseError,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
+        // School Payment System Oversight Card
+        item {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("PAYMENT SYSTEM & FEE COLLECTION", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        Surface(color = GoldSoft, shape = RoundedCornerShape(8.dp)) {
+                            Text(
+                                text = "$pendingVerificationCount Pending Verify",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = NavyDeep,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            )
+                        }
+                    }
+                    Text("Official Merchant UPI: ${gateway.merchantUpi} (${gateway.payeeName})", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+                    Text("Bank: ${gateway.bankName} • A/C: ${gateway.accountNo} • IFSC: ${gateway.ifsc}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (payments.isNotEmpty()) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outline)
+                        payments.take(3).forEach { pay ->
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("${pay.studentName} (${pay.className})", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                                Text("${formatInr(pay.amount)} • ${pay.status}", style = MaterialTheme.typography.labelSmall, color = if (pay.status == "VERIFIED") EmeraldSuccess else GoldAmberDark)
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                        FilledTonalButton(
+                            onClick = onOpenFeePayments,
+                            colors = ButtonDefaults.filledTonalButtonColors(containerColor = NavyDeep, contentColor = GoldAmber),
+                            modifier = Modifier.weight(1f).testTag("admin_open_fee_payments_btn"),
+                        ) {
+                            Icon(Icons.Filled.ReceiptLong, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("All Fee Payments")
+                        }
+                        OutlinedButton(
+                            onClick = onOpenCraftStudio,
+                            modifier = Modifier.weight(1f).testTag("admin_open_craft_studio_btn"),
+                        ) {
+                            Icon(Icons.Filled.Brush, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Craft & Projects")
+                        }
+                    }
+                }
+            }
+        }
+
+        // Bundled Campus Celebration Posters Preview
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("CAMPUS CELEBRATION POSTERS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                ) {
+                    listOf(
+                        Triple(R.drawable.poster_students_day_nov17, "International Students' Day", "17 Nov • Campus Poster"),
+                        Triple(R.drawable.poster_philanthropy_day_nov15, "National Philanthropy Day", "15 Nov • Kindness Campaign"),
+                    ).forEach { (resId, title, subtitle) ->
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            modifier = Modifier
+                                .width(210.dp)
+                                .clickable {
+                                    zoomPosterResId = resId
+                                    zoomPosterTitle = title
+                                },
+                        ) {
+                            Column {
+                                Image(
+                                    painter = painterResource(id = resId),
+                                    contentDescription = title,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(130.dp)
+                                        .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)),
+                                )
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+                                    Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4 Official Academic Wings Overview
+        item {
+            Text(
+                text = "4 OFFICIAL ACADEMIC WINGS",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SchoolCatalog.wings.chunked(2).forEach { pair ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        pair.forEach { wing ->
+                            val wingStudentCount = students.count { it.wing == wing.name || it.className in wing.classes }
+                            val wingTeacherCount = teachers.count { it.wing == wing.name || it.className in wing.classes }
+                            Card(
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(wing.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                                    Text(wing.classesLabel, style = MaterialTheme.typography.labelSmall, color = GoldAmberDark)
+                                    Text(
+                                        "$wingStudentCount Students • $wingTeacherCount Teachers",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Student-by-Student DPT Results
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "EACH STUDENT'S DPT RESULTS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (students.isNotEmpty()) {
+                        FilledTonalButton(
+                            onClick = onOpenProgressDashboard,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("admin_open_progress_chart_btn"),
+                        ) {
+                            Icon(Icons.Filled.ShowChart, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Progress Line Chart", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                    SchoolCatalog.dptWeeks.forEach { wk ->
+                        FilterChip(selected = selectedWeek == wk, onClick = { selectedWeek = wk }, label = { Text(wk) })
+                    }
+                }
+            }
+        }
+
+        items(studentDptRanked.withIndex().toList(), key = { "admin_dpt_${it.value.first.id}" }) { indexed ->
+            val rankNum = indexed.index + 1
+            val (student, entries, pct) = indexed.value
+            StudentDptResultCard(
+                student = student,
+                weekLabel = selectedWeek,
+                studentEntries = entries,
+                rankLabel = if (pct >= 0.0) "#$rankNum" else "—",
+            )
+        }
+
+        // Today's DPT Oversight
+        item {
+            Text(
+                text = "TODAY'S DPT OVERSIGHT (${SchoolCatalog.todayIso()})",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+
+        if (todayDpts.isEmpty()) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        "No Daily Practice Tests logged for today yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                }
+            }
+        } else {
+            items(todayDpts, key = { it.id }) { dpt ->
+                val isExam = dpt.assessmentType == "EXAM"
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, if (isExam) IndigoAccent.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Surface(
+                                        color = if (isExam) IndigoAccent else NavyDeep,
+                                        shape = RoundedCornerShape(6.dp),
+                                    ) {
+                                        Text(
+                                            text = if (isExam) "EXAM" else "DPT",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isExam) Color.White else GoldAmber,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        )
+                                    }
+                                    Text(
+                                        "${dpt.className}-${dpt.section} • ${dpt.subject}",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+                                Text(
+                                    if (dpt.held) "Topic: ${dpt.topic} (${dpt.maxMarks} Marks)"
+                                    else "Reason: ${dpt.reason}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                if (dpt.notes.isNotBlank()) {
+                                    Text(
+                                        dpt.notes,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Text(
+                                    "Teacher: ${dpt.teacherName} (${dpt.teacherId})",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Surface(
+                                color = if (dpt.held) EmeraldContainer else GoldSoft,
+                                shape = RoundedCornerShape(8.dp),
+                            ) {
+                                Text(
+                                    text = if (dpt.held) "HELD" else "NOT HELD",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (dpt.held) EmeraldSuccess else GoldAmberDark,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                )
+                            }
+                        }
+                        if (dpt.attachmentData.isNotBlank()) {
+                            AttachmentPreviewBlock(
+                                attachmentName = dpt.attachmentName,
+                                attachmentMimeType = dpt.attachmentMimeType,
+                                attachmentData = dpt.attachmentData,
+                                onShowMessage = onShowMessage,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    zoomPosterResId?.let { resId ->
+        Dialog(onDismissRequest = { zoomPosterResId = null }) {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(zoomPosterTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+                        IconButton(onClick = { zoomPosterResId = null }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Close poster preview")
+                        }
+                    }
+                    Image(
+                        painter = painterResource(id = resId),
+                        contentDescription = zoomPosterTitle,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AdminAccountsTab(
+    users: List<SchoolUser>,
+    onSaveUser: (SchoolUser) -> Unit,
+    onDeleteUser: (SchoolUser) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var editingDocId by remember { mutableStateOf("") }
+    var editingExistingCreatedAt by remember { mutableStateOf<com.google.firebase.Timestamp?>(null) }
+    var selectedRole by remember { mutableStateOf("STUDENT") }
+    var fullName by remember { mutableStateOf("") }
+    var userId by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf("") }
+    var className by remember { mutableStateOf("Class X") }
+    var section by remember { mutableStateOf("A") }
+    var subject by remember { mutableStateOf("Mathematics") }
+    var parentName by remember { mutableStateOf("") }
+    var monthlyTuition by remember { mutableStateOf("2800") }
+    var transportFee by remember { mutableStateOf("900") }
+    var searchQuery by remember { mutableStateOf("") }
+    var filterRole by remember { mutableStateOf("ALL") }
+
+    var classMenuExpanded by remember { mutableStateOf(false) }
+
+    fun resetForm() {
+        editingDocId = ""
+        editingExistingCreatedAt = null
+        fullName = ""
+        userId = ""
+        password = ""
+        phone = ""
+        parentName = ""
+    }
+
+    val filteredUsers = remember(users, searchQuery, filterRole) {
+        users.filter { u ->
+            val roleOk = filterRole == "ALL" || u.role == filterRole
+            val q = searchQuery.trim().lowercase()
+            val queryOk = q.isEmpty() ||
+                u.fullName.lowercase().contains(q) ||
+                u.userId.lowercase().contains(q) ||
+                u.className.lowercase().contains(q)
+            roleOk && queryOk
+        }.sortedBy { it.role }
+    }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (editingDocId.isBlank()) "Create New Login Account" else "Edit Account",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        if (editingDocId.isNotBlank()) {
+                            TextButton(onClick = { resetForm() }) { Text("Cancel Edit") }
+                        }
+                    }
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    ) {
+                        listOf(
+                            "STUDENT" to "Student",
+                            "TEACHER" to "Teacher",
+                            "FEE_MANAGER" to "Fee Mgr",
+                            "ADMIN" to "Principal / Admin",
+                        ).forEach { (rKey, label) ->
+                            FilterChip(
+                                selected = selectedRole == rKey,
+                                onClick = { selectedRole = rKey },
+                                label = { Text(label) },
+                                modifier = Modifier.testTag("admin_create_role_$rKey"),
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = fullName,
+                        onValueChange = { fullName = it },
+                        label = { Text("Full Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("admin_fullname_input"),
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = userId,
+                            onValueChange = { userId = it },
+                            label = {
+                                Text(
+                                    when (selectedRole) {
+                                        "STUDENT" -> "Admission No"
+                                        "TEACHER" -> "Employee ID"
+                                        "ADMIN" -> "Admin ID"
+                                        else -> "Staff ID"
+                                    }
+                                )
+                            },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f).testTag("admin_userid_input"),
+                        )
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            label = { Text("Login Password") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f).testTag("admin_password_input"),
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = phone,
+                        onValueChange = { phone = it },
+                        label = { Text("Mobile Number") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        modifier = Modifier.fillMaxWidth().testTag("admin_phone_input"),
+                    )
+
+                    if (selectedRole == "STUDENT" || selectedRole == "TEACHER") {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            Box(modifier = Modifier.weight(1f)) {
+                                OutlinedButton(
+                                    onClick = { classMenuExpanded = true },
+                                    modifier = Modifier.fillMaxWidth().height(54.dp),
+                                    shape = RoundedCornerShape(10.dp),
+                                ) {
+                                    Text("$className (${SchoolCatalog.wingForClass(className)})")
+                                }
+                                DropdownMenu(
+                                    expanded = classMenuExpanded,
+                                    onDismissRequest = { classMenuExpanded = false },
+                                ) {
+                                    SchoolCatalog.allClasses.forEach { cls ->
+                                        DropdownMenuItem(
+                                            text = { Text("$cls • ${SchoolCatalog.wingForClass(cls)}") },
+                                            onClick = {
+                                                className = cls
+                                                classMenuExpanded = false
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                SchoolCatalog.sections.forEach { sec ->
+                                    FilterChip(
+                                        selected = section == sec,
+                                        onClick = { section = sec },
+                                        label = { Text(sec) },
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (selectedRole == "TEACHER") {
+                        OutlinedTextField(
+                            value = subject,
+                            onValueChange = { subject = it },
+                            label = { Text("Teaching Subject") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+
+                    if (selectedRole == "STUDENT") {
+                        OutlinedTextField(
+                            value = parentName,
+                            onValueChange = { parentName = it },
+                            label = { Text("Father / Mother Name") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = monthlyTuition,
+                                onValueChange = { monthlyTuition = it },
+                                label = { Text("Monthly Tuition (₹)") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.weight(1f),
+                            )
+                            OutlinedTextField(
+                                value = transportFee,
+                                onValueChange = { transportFee = it },
+                                label = { Text("Bus Fee (₹)") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            if (fullName.isBlank() || userId.isBlank() || password.isBlank()) return@Button
+                            val wing = when (selectedRole) {
+                                "FEE_MANAGER" -> "Accounts Office"
+                                "ADMIN" -> "All Wings"
+                                else -> SchoolCatalog.wingForClass(className)
+                            }
+                            onSaveUser(
+                                SchoolUser(
+                                    id = editingDocId,
+                                    role = selectedRole,
+                                    userId = userId.trim(),
+                                    password = password.trim(),
+                                    fullName = fullName.trim(),
+                                    phone = phone.trim(),
+                                    wing = wing,
+                                    className = if (selectedRole == "FEE_MANAGER" || selectedRole == "ADMIN") "" else className,
+                                    section = if (selectedRole == "FEE_MANAGER" || selectedRole == "ADMIN") "" else section,
+                                    subject = when (selectedRole) {
+                                        "TEACHER" -> subject.trim()
+                                        "ADMIN" -> "Administration"
+                                        else -> ""
+                                    },
+                                    parentName = if (selectedRole == "STUDENT") parentName.trim() else "",
+                                    monthlyTuition = if (selectedRole == "STUDENT") (monthlyTuition.toLongOrNull() ?: 0L) else 0L,
+                                    transportFee = if (selectedRole == "STUDENT") (transportFee.toLongOrNull() ?: 0L) else 0L,
+                                    createdAt = editingExistingCreatedAt,
+                                )
+                            )
+                            resetForm()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("admin_save_account_btn"),
+                    ) {
+                        Icon(Icons.Filled.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (editingDocId.isBlank()) "Create Live Account" else "Save Account Changes")
+                    }
+                }
+            }
+        }
+
+        // Directory Search & Filter
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    label = { Text("Search Directory (Name, ID, Class)") },
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                ) {
+                    listOf("ALL" to "All", "STUDENT" to "Students", "TEACHER" to "Teachers", "FEE_MANAGER" to "Fee Managers", "ADMIN" to "Admins")
+                        .forEach { (key, label) ->
+                            FilterChip(
+                                selected = filterRole == key,
+                                onClick = { filterRole = key },
+                                label = { Text(label) },
+                            )
+                        }
+                }
+            }
+        }
+
+        items(filteredUsers, key = { it.id }) { u ->
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(u.fullName, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                            Surface(color = GoldSoft, shape = RoundedCornerShape(6.dp)) {
+                                Text(
+                                    u.role.replace('_', ' '),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = NavyDeep,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
+                        Text("ID: ${u.userId} | PW: ${u.password} | Ph: ${u.phone}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        if (u.className.isNotBlank()) {
+                            Text(
+                                "${u.className}-${u.section} (${u.wing})" +
+                                    if (u.subject.isNotBlank()) " • ${u.subject}" else "",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Row {
+                        IconButton(
+                            onClick = {
+                                editingDocId = u.id
+                                editingExistingCreatedAt = u.createdAt
+                                selectedRole = u.role
+                                fullName = u.fullName
+                                userId = u.userId
+                                password = u.password
+                                phone = u.phone
+                                if (u.className.isNotBlank()) className = u.className
+                                if (u.section.isNotBlank()) section = u.section
+                                if (u.subject.isNotBlank()) subject = u.subject
+                                parentName = u.parentName
+                                monthlyTuition = u.monthlyTuition.toString()
+                                transportFee = u.transportFee.toString()
+                            },
+                        ) {
+                            Icon(Icons.Filled.Edit, contentDescription = "Edit ${u.fullName}", tint = MaterialTheme.colorScheme.primary)
+                        }
+                        if (u.role != "ADMIN") {
+                            IconButton(onClick = { onDeleteUser(u) }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Delete ${u.fullName}", tint = RoseError)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AdminCircularsTab(
+    adminUser: SchoolUser,
+    circulars: List<Circular>,
+    onPostCircular: (Circular) -> Unit,
+    onDeleteCircular: (Circular) -> Unit,
+    onShowMessage: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var title by remember { mutableStateOf("") }
+    var category by remember { mutableStateOf("Notice") }
+    var audience by remember { mutableStateOf("All Wings") }
+    var date by remember { mutableStateOf(SchoolCatalog.todayIso()) }
+    var content by remember { mutableStateOf("") }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Principal Circular & Broadcast", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                    OutlinedTextField(
+                        value = title,
+                        onValueChange = { title = it },
+                        label = { Text("Circular Title") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("circular_title_input"),
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    ) {
+                        listOf("Notice", "Holiday", "Exam Datesheet", "Event").forEach { cat ->
+                            FilterChip(selected = category == cat, onClick = { category = cat }, label = { Text(cat) })
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = audience,
+                            onValueChange = { audience = it },
+                            label = { Text("Target Audience") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        OutlinedTextField(
+                            value = date,
+                            onValueChange = { date = it },
+                            label = { Text("Date") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    OutlinedTextField(
+                        value = content,
+                        onValueChange = { content = it },
+                        label = { Text("Announcement Details") },
+                        minLines = 3,
+                        modifier = Modifier.fillMaxWidth().testTag("circular_content_input"),
+                    )
+                    Button(
+                        onClick = {
+                            if (title.isBlank() || content.isBlank()) return@Button
+                            onPostCircular(
+                                Circular(
+                                    title = title.trim(),
+                                    category = category,
+                                    audience = audience.trim().ifBlank { "All Wings" },
+                                    date = date.trim().ifBlank { SchoolCatalog.todayIso() },
+                                    content = content.trim(),
+                                    postedBy = adminUser.fullName,
+                                )
+                            )
+                            title = ""
+                            content = ""
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("circular_publish_btn"),
+                    ) {
+                        Icon(Icons.Filled.Campaign, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Broadcast Circular to All Roles")
+                    }
+                }
+            }
+        }
+
+        items(circulars, key = { it.id }) { c ->
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Surface(color = GoldSoft, shape = RoundedCornerShape(6.dp)) {
+                                Text(c.category, style = MaterialTheme.typography.labelSmall, color = NavyDeep, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+                            }
+                            if (c.recipientDocId.isNotBlank()) {
+                                Surface(color = IndigoAccent.copy(alpha = 0.14f), shape = RoundedCornerShape(6.dp)) {
+                                    Text(
+                                        "To: ${c.recipientName}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = IndigoAccent,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    )
+                                }
+                            }
+                            Text("${c.audience} • ${c.date}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        IconButton(onClick = { onDeleteCircular(c) }) {
+                            Icon(Icons.Filled.Delete, contentDescription = "Delete circular", tint = RoseError)
+                        }
+                    }
+                    Text(c.title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text(c.content, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (c.attachmentData.isNotBlank()) {
+                        AttachmentPreviewBlock(
+                            attachmentName = c.attachmentName,
+                            attachmentMimeType = c.attachmentMimeType,
+                            attachmentData = c.attachmentData,
+                            onShowMessage = onShowMessage,
+                        )
+                    }
+                    Text(
+                        "Posted by: ${c.postedBy} (${c.senderRole})",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+    }
+}

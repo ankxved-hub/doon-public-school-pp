@@ -1,0 +1,330 @@
+package com.example.data.model
+
+import com.google.firebase.Timestamp
+import com.google.firebase.firestore.DocumentId
+import com.google.firebase.firestore.IgnoreExtraProperties
+import com.google.firebase.firestore.ServerTimestamp
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+object SchoolInfo {
+    const val NAME = "Doon Public School, Etah"
+    const val SHORT_NAME = "DPS Etah"
+    const val AFFILIATION = "CBSE Affiliated (Nursery to Class XII)"
+    const val TRUST = "Managed by Murli Krishna Educational Trust"
+    const val MOTTO = "Where Excellence is a Habit! — Excelling with Legacy, Leading with Purpose"
+    const val ADDRESS = "4th Milestone, Opposite PAC, Kasganj Road, Aruna Nagar, Etah – 207001 (U.P.)"
+    const val PHONES = "+91 76176 14471, +91 76176 14470"
+    const val EMAIL = "doonpublicschooletah@gmail.com"
+}
+
+data class AcademicWing(
+    val id: String,
+    val name: String,
+    val subtitle: String,
+    val classesLabel: String,
+    val classes: List<String>,
+)
+
+object SchoolCatalog {
+    val wings = listOf(
+        AcademicWing("doon-kidz", "Doon Kidz", "Pre-Primary Wing", "Nursery, LKG, UKG", listOf("Nursery", "LKG", "UKG")),
+        AcademicWing("lower-school", "Lower School", "Primary Wing", "Classes I to V", listOf("Class I", "Class II", "Class III", "Class IV", "Class V")),
+        AcademicWing("middle-school", "Middle School", "Upper Primary Wing", "Classes VI to VIII", listOf("Class VI", "Class VII", "Class VIII")),
+        AcademicWing("upper-school", "Upper School", "Senior Secondary Wing", "Classes IX to XII", listOf("Class IX", "Class X", "Class XI", "Class XII")),
+    )
+
+    val allClasses: List<String> = wings.flatMap { it.classes }
+    val sections: List<String> = listOf("A", "B", "C")
+    val dptWeeks: List<String> = listOf(
+        "Week 1 (Nov 2026)",
+        "Week 2 (Nov 2026)",
+        "Week 3 (Nov 2026)",
+        "Week 4 (Nov 2026)",
+    )
+    val dptNotHeldReasons: List<String> = listOf(
+        "Practical Lab Session",
+        "Topic in Progress",
+        "School Activity / Event",
+        "Revision & Doubt Session",
+        "Unit / Term Exam Schedule",
+    )
+    val craftCategories: List<String> = listOf(
+        "Art & Craft",
+        "Science Model",
+        "Eco Recycling",
+        "Robotics & STEM",
+        "Clay & Sculpture",
+        "Skill Showcase",
+    )
+
+    fun wingForClass(className: String): String =
+        wings.firstOrNull { className in it.classes }?.name ?: "Upper School"
+
+    fun subjectsForClass(className: String): List<String> = when (className) {
+        "Nursery", "LKG", "UKG" -> listOf("English", "Hindi", "Mathematics", "Rhymes & Phonics", "General Awareness")
+        "Class I", "Class II", "Class III", "Class IV", "Class V" -> listOf("English", "Hindi", "Mathematics", "EVS", "Computer")
+        "Class VI", "Class VII", "Class VIII" -> listOf("English", "Hindi", "Mathematics", "Science", "Social Science", "Sanskrit", "Computer")
+        else -> listOf("English", "Mathematics", "Science", "Social Science", "Hindi / Computer")
+    }
+
+    data class TimetableSlot(
+        val period: String,
+        val time: String,
+        val mon: String,
+        val tue: String,
+        val wed: String,
+        val thu: String,
+        val fri: String,
+        val sat: String,
+    )
+
+    val standardTimetable = listOf(
+        TimetableSlot("Assembly", "08:00 - 08:25", "Prayer & News", "Thought & Quiz", "PT / Yoga", "Value Talk", "House Activity", "Club Assembly"),
+        TimetableSlot("Period 1", "08:25 - 09:05", "Mathematics", "Mathematics", "Mathematics", "Mathematics", "Mathematics", "DPT Evaluation"),
+        TimetableSlot("Period 2", "09:05 - 09:45", "English", "English", "English", "English", "English", "English Grammar"),
+        TimetableSlot("Period 3", "09:45 - 10:25", "Science", "Science", "Science (Lab)", "Science", "Science", "Science Quiz"),
+        TimetableSlot("DPT Slot", "10:25 - 10:45", "Daily Practice Test", "Daily Practice Test", "Daily Practice Test", "Daily Practice Test", "Daily Practice Test", "Weekly Recap"),
+        TimetableSlot("Recess", "10:45 - 11:10", "Lunch Break", "Lunch Break", "Lunch Break", "Lunch Break", "Lunch Break", "Lunch Break"),
+        TimetableSlot("Period 4", "11:10 - 11:50", "Social Science", "Social Science", "Social Science", "Social Science", "Social Science", "Library"),
+        TimetableSlot("Period 5", "11:50 - 12:30", "Hindi / Sanskrit", "Hindi / Sanskrit", "Hindi / Sanskrit", "Hindi / Sanskrit", "Hindi / Sanskrit", "Art & Craft"),
+        TimetableSlot("Period 6", "12:30 - 01:10", "Computer / IT", "Sports / Games", "Computer / IT", "Library", "Sports / Games", "Co-Curricular"),
+    )
+
+    fun todayIso(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+}
+
+@IgnoreExtraProperties
+data class SchoolUser(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val role: String = "STUDENT", // ADMIN | TEACHER | FEE_MANAGER | STUDENT
+    val userId: String = "",
+    val password: String = "",
+    val fullName: String = "",
+    val phone: String = "",
+    val wing: String = "",
+    val className: String = "",
+    val section: String = "",
+    val subject: String = "",
+    val parentName: String = "",
+    val monthlyTuition: Long = 0L,
+    val transportFee: Long = 0L,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class GatewayConfig(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val merchantUpi: String = "doonpublicetah@sbi",
+    val payeeName: String = "Doon Public School Etah",
+    val bankName: String = "State Bank of India (Aruna Nagar, Etah)",
+    val accountNo: String = "39481020004512",
+    val ifsc: String = "SBIN0004512",
+    val razorpayKeyId: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class Circular(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val title: String = "",
+    val category: String = "Notice",
+    val audience: String = "All Wings",
+    val date: String = "",
+    val content: String = "",
+    val postedBy: String = "",
+    val recipientDocId: String = "", // Empty = broadcast; non-empty = targeted to specific user doc ID
+    val recipientName: String = "",
+    val senderRole: String = "ADMIN", // ADMIN | TEACHER
+    val attachmentName: String = "",
+    val attachmentMimeType: String = "",
+    val attachmentData: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class DptDaily(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val date: String = "",
+    val className: String = "",
+    val section: String = "",
+    val subject: String = "",
+    val assessmentType: String = "DPT", // DPT | EXAM
+    val held: Boolean = true,
+    val topic: String = "",
+    val maxMarks: Long = 0L, // 0..100
+    val notes: String = "",
+    val reason: String = "",
+    val attachmentName: String = "",
+    val attachmentMimeType: String = "",
+    val attachmentData: String = "",
+    val teacherId: String = "",
+    val teacherName: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class DptWeekly(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val week: String = "",
+    val className: String = "",
+    val section: String = "",
+    val subject: String = "",
+    val studentDocId: String = "",
+    val studentName: String = "",
+    val admissionNo: String = "",
+    val scored: Long = 0L,
+    val maxMarks: Long = 20L,
+    val teacherId: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class AttendanceRecord(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val date: String = "",
+    val className: String = "",
+    val section: String = "",
+    val studentDocId: String = "",
+    val status: String = "Present", // Present | Absent | Leave
+    val markedBy: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class LeaveRequest(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val studentDocId: String = "",
+    val studentName: String = "",
+    val admissionNo: String = "",
+    val className: String = "",
+    val section: String = "",
+    val fromDate: String = "",
+    val toDate: String = "",
+    val reason: String = "",
+    val status: String = "Pending", // Pending | Approved | Rejected
+    val teacherRemark: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class HomeworkItem(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val className: String = "",
+    val section: String = "",
+    val subject: String = "",
+    val title: String = "",
+    val description: String = "",
+    val dueDate: String = "",
+    val teacherName: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class TermMarkCard(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val term: String = "",
+    val className: String = "",
+    val section: String = "",
+    val studentDocId: String = "",
+    val studentName: String = "",
+    val admissionNo: String = "",
+    val marks: Map<String, Map<String, Long>> = emptyMap(),
+    val remarks: String = "",
+    val publishedBy: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class FeeItem(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val studentDocId: String = "",
+    val title: String = "",
+    val month: String = "",
+    val amount: Long = 0L,
+    val status: String = "UNPAID", // UNPAID | PENDING_VERIFICATION | PAID
+    val paymentId: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class FeePayment(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val studentDocId: String = "",
+    val studentName: String = "",
+    val admissionNo: String = "",
+    val className: String = "",
+    val feeItemIds: List<String> = emptyList(),
+    val feeSummary: String = "",
+    val amount: Long = 0L,
+    val mode: String = "UPI", // UPI | RAZORPAY
+    val utrOrRef: String = "",
+    val upiApp: String = "",
+    val status: String = "PENDING", // PENDING | VERIFIED | REJECTED
+    val receiptNo: String = "",
+    val rejectReason: String = "",
+    val verifiedBy: String = "",
+    val verifiedAtStr: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class DoubtMessage(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val studentDocId: String = "",
+    val studentName: String = "",
+    val className: String = "",
+    val subject: String = "",
+    val message: String = "",
+    val reply: String = "",
+    val repliedBy: String = "",
+    val status: String = "OPEN", // OPEN | REPLIED
+    val dateLabel: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class CraftProject(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val title: String = "",
+    val category: String = "Art & Craft",
+    val description: String = "",
+    val materials: String = "",
+    val authorDocId: String = "",
+    val authorName: String = "",
+    val authorUserId: String = "",
+    val authorRole: String = "STUDENT", // STUDENT | TEACHER | ADMIN
+    val classInfo: String = "",
+    val dateLabel: String = "",
+    val aiImageData: String = "",
+    val aiPromptUsed: String = "",
+    val likesCount: Long = 0L,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
