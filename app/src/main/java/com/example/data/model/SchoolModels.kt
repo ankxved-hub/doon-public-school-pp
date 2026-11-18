@@ -9,8 +9,9 @@ import java.util.Date
 import java.util.Locale
 
 object SchoolInfo {
+    const val SCHOOL_ID = "dps_etah"
     const val NAME = "Doon Public School, Etah"
-    const val SHORT_NAME = "DPS Etah"
+    const val SHORT_NAME = "Doon Public School"
     const val AFFILIATION = "CBSE Affiliated (Nursery to Class XII)"
     const val TRUST = "Managed by Murli Krishna Educational Trust"
     const val MOTTO = "Where Excellence is a Habit! — Excelling with Legacy, Leading with Purpose"
@@ -69,6 +70,23 @@ object SchoolCatalog {
         else -> listOf("English", "Mathematics", "Science", "Social Science", "Hindi / Computer")
     }
 
+    /**
+     * Generates the next sequential student roll number: 001, 002, 003...
+     * Increments from the highest existing pure numeric roll number, skipping collisions.
+     */
+    fun nextStudentRollNumber(users: List<SchoolUser>): String {
+        val existingIds = users.map { it.userId.trim().uppercase(Locale.US) }.toSet()
+        val maxNumeric = users
+            .filter { it.role == "STUDENT" }
+            .mapNotNull { u -> u.userId.trim().takeIf { it.matches(Regex("^\\d+$")) }?.toIntOrNull() }
+            .maxOrNull() ?: 0
+        var next = maxNumeric + 1
+        while (next.toString().padStart(3, '0') in existingIds) {
+            next += 1
+        }
+        return next.toString().padStart(3, '0')
+    }
+
     data class TimetableSlot(
         val period: String,
         val time: String,
@@ -80,17 +98,73 @@ object SchoolCatalog {
         val sat: String,
     )
 
-    val standardTimetable = listOf(
-        TimetableSlot("Assembly", "08:00 - 08:25", "Prayer & News", "Thought & Quiz", "PT / Yoga", "Value Talk", "House Activity", "Club Assembly"),
-        TimetableSlot("Period 1", "08:25 - 09:05", "Mathematics", "Mathematics", "Mathematics", "Mathematics", "Mathematics", "DPT Evaluation"),
-        TimetableSlot("Period 2", "09:05 - 09:45", "English", "English", "English", "English", "English", "English Grammar"),
-        TimetableSlot("Period 3", "09:45 - 10:25", "Science", "Science", "Science (Lab)", "Science", "Science", "Science Quiz"),
-        TimetableSlot("DPT Slot", "10:25 - 10:45", "Daily Practice Test", "Daily Practice Test", "Daily Practice Test", "Daily Practice Test", "Daily Practice Test", "Weekly Recap"),
-        TimetableSlot("Recess", "10:45 - 11:10", "Lunch Break", "Lunch Break", "Lunch Break", "Lunch Break", "Lunch Break", "Lunch Break"),
-        TimetableSlot("Period 4", "11:10 - 11:50", "Social Science", "Social Science", "Social Science", "Social Science", "Social Science", "Library"),
-        TimetableSlot("Period 5", "11:50 - 12:30", "Hindi / Sanskrit", "Hindi / Sanskrit", "Hindi / Sanskrit", "Hindi / Sanskrit", "Hindi / Sanskrit", "Art & Craft"),
-        TimetableSlot("Period 6", "12:30 - 01:10", "Computer / IT", "Sports / Games", "Computer / IT", "Library", "Sports / Games", "Co-Curricular"),
+    fun TimetableSlot.toSlotMap(): Map<String, String> = mapOf(
+        "period" to period,
+        "time" to time,
+        "mon" to mon,
+        "tue" to tue,
+        "wed" to wed,
+        "thu" to thu,
+        "fri" to fri,
+        "sat" to sat,
     )
+
+    fun slotFromMap(map: Map<String, String>): TimetableSlot = TimetableSlot(
+        period = map["period"].orEmpty(),
+        time = map["time"].orEmpty(),
+        mon = map["mon"].orEmpty(),
+        tue = map["tue"].orEmpty(),
+        wed = map["wed"].orEmpty(),
+        thu = map["thu"].orEmpty(),
+        fri = map["fri"].orEmpty(),
+        sat = map["sat"].orEmpty(),
+    )
+
+    fun defaultTimetableSlotsFor(className: String, section: String): List<TimetableSlot> {
+        val wing = wingForClass(className)
+        return when (wing) {
+            "Doon Kidz" -> listOf(
+                TimetableSlot("Assembly", "08:30 - 08:50", "Morning Rhymes", "Action Songs", "Yoga & Stretching", "Story Time", "Prayer & Manners", "Fun Assembly"),
+                TimetableSlot("Period 1", "08:50 - 09:30", "English Phonics", "English Writing", "English Phonics", "English Reading", "English Rhymes", "Picture Talk"),
+                TimetableSlot("Period 2", "09:30 - 10:10", "Number Magic", "Counting & Shapes", "Number Magic", "Number Tracing", "Mental Games", "Activity Corner"),
+                TimetableSlot("Recess", "10:10 - 10:35", "Fruit & Lunch Break", "Fruit & Lunch Break", "Fruit & Lunch Break", "Fruit & Lunch Break", "Fruit & Lunch Break", "Fruit & Lunch Break"),
+                TimetableSlot("Period 3", "10:35 - 11:15", "Hindi Swar/Vyanjan", "Hindi Rhymes", "Hindi Writing", "Hindi Reading", "General Awareness", "Colouring"),
+                TimetableSlot("Period 4", "11:15 - 11:55", "Clay & Craft", "Outdoor Play", "Music & Dance", "Puzzle Play", "Art & Drawing", "Show & Tell"),
+            )
+            "Lower School" -> listOf(
+                TimetableSlot("Assembly", "08:00 - 08:25", "Prayer & News", "Thought & Quiz", "PT / Yoga", "Value Talk", "House Activity", "Club Assembly"),
+                TimetableSlot("Period 1", "08:25 - 09:05", "English", "Mathematics", "English", "Mathematics", "English", "Reading Club"),
+                TimetableSlot("Period 2", "09:05 - 09:45", "Mathematics", "English", "Mathematics", "EVS", "Mathematics", "Mental Maths"),
+                TimetableSlot("Period 3", "09:45 - 10:25", "EVS", "Hindi", "EVS", "English", "Hindi", "Science Activity"),
+                TimetableSlot("DPT Slot", "10:25 - 10:45", "Daily Practice Test", "Daily Practice Test", "Daily Practice Test", "Daily Practice Test", "Daily Practice Test", "Weekly Recap"),
+                TimetableSlot("Recess", "10:45 - 11:10", "Lunch Break", "Lunch Break", "Lunch Break", "Lunch Break", "Lunch Break", "Lunch Break"),
+                TimetableSlot("Period 4", "11:10 - 11:50", "Hindi", "Computer", "Hindi", "Hindi", "EVS", "Art & Craft"),
+                TimetableSlot("Period 5", "11:50 - 12:30", "Computer", "Library", "Sports / Games", "Computer", "Games", "Co-Curricular"),
+            )
+            else -> {
+                val shift = when (section.uppercase(Locale.US)) {
+                    "B" -> 1
+                    "C" -> 2
+                    else -> 0
+                }
+                val core = listOf("Mathematics", "Science", "English", "Social Science", "Hindi / Sanskrit", "Computer / IT")
+                fun subAt(idx: Int) = core[(idx + shift) % core.size]
+                listOf(
+                    TimetableSlot("Assembly", "08:00 - 08:25", "Prayer & News", "Thought & Quiz", "PT / Yoga", "Value Talk", "House Activity", "Club Assembly"),
+                    TimetableSlot("Period 1", "08:25 - 09:05", subAt(0), subAt(1), subAt(0), subAt(2), subAt(0), "DPT Evaluation"),
+                    TimetableSlot("Period 2", "09:05 - 09:45", subAt(2), subAt(0), subAt(1), subAt(0), subAt(2), "English Grammar"),
+                    TimetableSlot("Period 3", "09:45 - 10:25", subAt(1), subAt(2), "${subAt(1)} (Lab)", subAt(3), subAt(1), "Science Quiz"),
+                    TimetableSlot("DPT Slot", "10:25 - 10:45", "Daily Practice Test", "Daily Practice Test", "Daily Practice Test", "Daily Practice Test", "Daily Practice Test", "Weekly Recap"),
+                    TimetableSlot("Recess", "10:45 - 11:10", "Lunch Break", "Lunch Break", "Lunch Break", "Lunch Break", "Lunch Break", "Lunch Break"),
+                    TimetableSlot("Period 4", "11:10 - 11:50", subAt(3), subAt(4), subAt(3), subAt(1), subAt(3), "Library"),
+                    TimetableSlot("Period 5", "11:50 - 12:30", subAt(4), subAt(3), subAt(4), subAt(4), subAt(5), "Art & Craft"),
+                    TimetableSlot("Period 6", "12:30 - 01:10", subAt(5), "Sports / Games", subAt(5), "Library", "Sports / Games", "Co-Curricular"),
+                )
+            }
+        }
+    }
+
+    val standardTimetable = defaultTimetableSlotsFor("Class X", "A")
 
     fun todayIso(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 }
@@ -136,6 +210,9 @@ data class Circular(
     val title: String = "",
     val category: String = "Notice",
     val audience: String = "All Wings",
+    val targetWing: String = "",
+    val targetClass: String = "",
+    val targetSection: String = "",
     val date: String = "",
     val content: String = "",
     val postedBy: String = "",
@@ -325,6 +402,41 @@ data class CraftProject(
     val aiImageData: String = "",
     val aiPromptUsed: String = "",
     val likesCount: Long = 0L,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class CampusPoster(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val title: String = "",
+    val subtitle: String = "",
+    val date: String = "",
+    val imageData: String = "",
+    val postedBy: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class ClassTimetable(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val className: String = "",
+    val section: String = "",
+    val slots: List<Map<String, String>> = emptyList(),
+    val updatedBy: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class CraftLike(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val projectId: String = "",
+    val likerId: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null,
 )

@@ -25,6 +25,7 @@ import com.example.data.model.*
 import com.example.ui.components.AttachmentPickerChip
 import com.example.ui.components.AttachmentPreviewBlock
 import com.example.ui.components.PickedAttachment
+import com.example.ui.components.SchoolDatePickerField
 import com.example.ui.components.readAttachmentFromUri
 import com.example.ui.theme.*
 
@@ -41,7 +42,7 @@ fun TeacherNoticesTab(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    var targetSpecificPerson by remember { mutableStateOf(true) }
+    var targetSpecificPerson by remember { mutableStateOf(false) }
     var recipientSearch by remember { mutableStateOf("") }
     var recipientMenuOpen by remember { mutableStateOf(false) }
 
@@ -66,9 +67,12 @@ fun TeacherNoticesTab(
         )
     }
 
-    var audience by remember(selectedClass, selectedSection) {
-        mutableStateOf("$selectedClass-$selectedSection")
-    }
+    // Class / Wing / All Classes dropdown target
+    var selectedTargetScope by remember(selectedClass) { mutableStateOf(selectedClass.ifBlank { "All Classes" }) }
+    var selectedTargetSection by remember(selectedSection) { mutableStateOf(selectedSection.ifBlank { "ALL" }) }
+    var classTargetMenuOpen by remember { mutableStateOf(false) }
+    var selectedDate by remember { mutableStateOf(SchoolCatalog.todayIso()) }
+
     var category by remember { mutableStateOf("Notice") }
     var title by remember { mutableStateOf("") }
     var content by remember { mutableStateOf("") }
@@ -119,12 +123,22 @@ fun TeacherNoticesTab(
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "Send Notice with Photo / Document",
+                        "Send Class Notice / Holiday / Circular",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        FilterChip(
+                            selected = !targetSpecificPerson,
+                            onClick = {
+                                targetSpecificPerson = false
+                                validationError = null
+                            },
+                            label = { Text("Class / School") },
+                            leadingIcon = { Icon(Icons.Filled.Groups, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                            modifier = Modifier.weight(1f).testTag("notice_target_broadcast"),
+                        )
                         FilterChip(
                             selected = targetSpecificPerson,
                             onClick = {
@@ -134,16 +148,6 @@ fun TeacherNoticesTab(
                             label = { Text("Specific Person") },
                             leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null, modifier = Modifier.size(16.dp)) },
                             modifier = Modifier.weight(1f).testTag("notice_target_person"),
-                        )
-                        FilterChip(
-                            selected = !targetSpecificPerson,
-                            onClick = {
-                                targetSpecificPerson = false
-                                validationError = null
-                            },
-                            label = { Text("Class / Broadcast") },
-                            leadingIcon = { Icon(Icons.Filled.Groups, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                            modifier = Modifier.weight(1f).testTag("notice_target_broadcast"),
                         )
                     }
 
@@ -159,7 +163,7 @@ fun TeacherNoticesTab(
                         Box {
                             OutlinedButton(
                                 onClick = { recipientMenuOpen = true },
-                                modifier = Modifier.fillMaxWidth().testTag("notice_recipient_picker"),
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp).testTag("notice_recipient_picker"),
                             ) {
                                 Icon(Icons.Filled.PersonPin, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(8.dp))
@@ -196,21 +200,98 @@ fun TeacherNoticesTab(
                             }
                         }
                     } else {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        ) {
-                            listOf("$selectedClass-$selectedSection", "All Wings", "All Students", "Parents Only").forEach { aud ->
-                                FilterChip(selected = audience == aud, onClick = { audience = aud }, label = { Text(aud) })
+                        // Class / Wing / All Classes Dropdown Selector
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(
+                                onClick = { classTargetMenuOpen = true },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 52.dp)
+                                    .testTag("teacher_notice_class_dropdown"),
+                            ) {
+                                Icon(Icons.Filled.Class, contentDescription = "Target Class", modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Select Target Class", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(
+                                        text = if (selectedTargetScope in SchoolCatalog.allClasses) {
+                                            val secText = if (selectedTargetSection == "ALL") "All Sections" else "Section $selectedTargetSection"
+                                            "$selectedTargetScope ($secText)"
+                                        } else {
+                                            selectedTargetScope
+                                        },
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+                                Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
+                            }
+                            DropdownMenu(expanded = classTargetMenuOpen, onDismissRequest = { classTargetMenuOpen = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("All Classes (Entire School)") },
+                                    onClick = {
+                                        selectedTargetScope = "All Classes"
+                                        classTargetMenuOpen = false
+                                    },
+                                )
+                                SchoolCatalog.wings.forEach { wing ->
+                                    DropdownMenuItem(
+                                        text = { Text("Wing: ${wing.name} (${wing.classesLabel})") },
+                                        onClick = {
+                                            selectedTargetScope = "Wing: ${wing.name}"
+                                            classTargetMenuOpen = false
+                                        },
+                                    )
+                                }
+                                HorizontalDivider()
+                                SchoolCatalog.allClasses.forEach { cls ->
+                                    DropdownMenuItem(
+                                        text = { Text("$cls (${SchoolCatalog.wingForClass(cls)})") },
+                                        onClick = {
+                                            selectedTargetScope = cls
+                                            classTargetMenuOpen = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+
+                        if (selectedTargetScope in SchoolCatalog.allClasses) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            ) {
+                                FilterChip(
+                                    selected = selectedTargetSection == "ALL",
+                                    onClick = { selectedTargetSection = "ALL" },
+                                    label = { Text("All Sections") },
+                                )
+                                SchoolCatalog.sections.forEach { sec ->
+                                    FilterChip(
+                                        selected = selectedTargetSection == sec,
+                                        onClick = { selectedTargetSection = sec },
+                                        label = { Text("Sec $sec") },
+                                    )
+                                }
                             }
                         }
                     }
+
+                    SchoolDatePickerField(
+                        label = "Notice / Holiday Date",
+                        selectedDate = selectedDate,
+                        onDateSelected = { selectedDate = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        testTagName = "teacher_notice_date_picker",
+                    )
 
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.horizontalScroll(rememberScrollState()),
                     ) {
-                        listOf("Notice", "Appreciation", "PTM Invite", "Assignment", "Exam Update").forEach { cat ->
+                        listOf("Notice", "Holiday", "Assignment", "PTM Invite", "Exam Update", "Appreciation").forEach { cat ->
                             FilterChip(selected = category == cat, onClick = { category = cat }, label = { Text(cat) })
                         }
                     }
@@ -232,7 +313,7 @@ fun TeacherNoticesTab(
                             content = it.take(2000)
                             if (validationError != null) validationError = null
                         },
-                        label = { Text("Notice Message") },
+                        label = { Text("Notice / Holiday Details") },
                         minLines = 3,
                         modifier = Modifier.fillMaxWidth().testTag("teacher_notice_content"),
                     )
@@ -244,7 +325,7 @@ fun TeacherNoticesTab(
                                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                 )
                             },
-                            modifier = Modifier.weight(1f).testTag("notice_attach_photo_btn"),
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("notice_attach_photo_btn"),
                         ) {
                             Icon(Icons.Filled.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
@@ -262,7 +343,7 @@ fun TeacherNoticesTab(
                                     )
                                 )
                             },
-                            modifier = Modifier.weight(1f).testTag("notice_attach_doc_btn"),
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("notice_attach_doc_btn"),
                         ) {
                             Icon(Icons.Filled.AttachFile, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
@@ -292,12 +373,32 @@ fun TeacherNoticesTab(
                             validationError = null
                             val rec = if (targetSpecificPerson) selectedRecipient else null
                             val recLabel = rec?.let { "${it.fullName} (${it.userId})" } ?: ""
+
+                            val tClass = if (rec == null && selectedTargetScope in SchoolCatalog.allClasses) selectedTargetScope else ""
+                            val tSection = if (tClass.isNotBlank() && selectedTargetSection != "ALL") selectedTargetSection else ""
+                            val tWing = when {
+                                rec != null -> ""
+                                tClass.isNotBlank() -> SchoolCatalog.wingForClass(tClass)
+                                selectedTargetScope.startsWith("Wing: ") -> selectedTargetScope.removePrefix("Wing: ").trim()
+                                else -> ""
+                            }
+                            val audLabel = when {
+                                rec != null -> "Direct: $recLabel"
+                                tClass.isNotBlank() && tSection.isNotBlank() -> "$tClass-$tSection"
+                                tClass.isNotBlank() -> "$tClass (All Sections)"
+                                tWing.isNotBlank() -> tWing
+                                else -> "All Classes"
+                            }
+
                             onPostNotice(
                                 Circular(
                                     title = title.trim(),
                                     category = category,
-                                    audience = if (rec != null) "Direct: $recLabel" else audience,
-                                    date = SchoolCatalog.todayIso(),
+                                    audience = audLabel,
+                                    targetWing = tWing,
+                                    targetClass = tClass,
+                                    targetSection = tSection,
+                                    date = selectedDate.ifBlank { SchoolCatalog.todayIso() },
                                     content = content.trim(),
                                     postedBy = teacher.fullName,
                                     recipientDocId = rec?.id ?: "",
@@ -318,7 +419,7 @@ fun TeacherNoticesTab(
                     ) {
                         Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text(if (targetSpecificPerson) "Send Direct Notice" else "Send Class / Broadcast Notice")
+                        Text(if (targetSpecificPerson) "Send Direct Notice" else "Publish Targeted Notice")
                     }
                 }
             }
@@ -372,7 +473,7 @@ fun TeacherNoticesTab(
                     }
                     Text(c.title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                     Text(c.content, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("From: ${c.postedBy} • ${c.date}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("From: ${c.postedBy} (${c.senderRole}) • ${c.date}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     AttachmentPreviewBlock(
                         attachmentName = c.attachmentName,
                         attachmentMimeType = c.attachmentMimeType,

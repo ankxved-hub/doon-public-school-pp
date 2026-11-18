@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -20,18 +23,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import com.example.R
 import com.example.data.model.*
+import com.example.ui.components.AttachmentPickerChip
 import com.example.ui.components.AttachmentPreviewBlock
+import com.example.ui.components.PickedAttachment
+import com.example.ui.components.SchoolDatePickerField
 import com.example.ui.components.StatMetricCard
 import com.example.ui.components.StudentDptResultCard
+import com.example.ui.components.decodeAttachmentBitmap
 import com.example.ui.components.formatInr
+import com.example.ui.components.readAttachmentFromUri
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.CraftAiImageState
 
@@ -49,11 +57,16 @@ fun AdminScreen(
     feeItems: List<FeeItem>,
     payments: List<FeePayment>,
     craftProjects: List<CraftProject> = emptyList(),
+    likedProjectIds: Set<String> = emptySet(),
+    likingProjectIds: Set<String> = emptySet(),
+    campusPosters: List<CampusPoster> = emptyList(),
     craftAiImageState: CraftAiImageState = CraftAiImageState.Idle,
     generatingCraftPostId: String? = null,
     onSaveUser: (SchoolUser) -> Unit,
+    onDeleteUser: (SchoolUser) -> Unit,
     onDeleteRecord: (collection: String, docId: String, label: String) -> Unit,
     onPostCircular: (Circular) -> Unit,
+    onPublishCampusPoster: (CampusPoster) -> Unit = {},
     onGenerateCraftAiImage: (String, String, String, String) -> Unit = { _, _, _, _ -> },
     onClearCraftPreview: () -> Unit = {},
     onPublishCraftProject: (CraftProject) -> Unit = {},
@@ -98,6 +111,9 @@ fun AdminScreen(
             todayAttendance = attendance.filter { it.date == today },
             feeItems = feeItems,
             payments = payments,
+            campusPosters = campusPosters,
+            onPublishCampusPoster = onPublishCampusPoster,
+            onDeleteCampusPoster = { p -> onDeleteRecord("campusPosters", p.id, p.title) },
             onOpenProgressDashboard = { showStudentProgressDashboard = true },
             onOpenFeePayments = { onNavigateToTab(3) },
             onOpenCraftStudio = { onNavigateToTab(4) },
@@ -108,7 +124,7 @@ fun AdminScreen(
         1 -> AdminAccountsTab(
             users = users,
             onSaveUser = onSaveUser,
-            onDeleteUser = { user -> onDeleteRecord("users", user.id, user.fullName) },
+            onDeleteUser = onDeleteUser,
             modifier = modifier,
         )
         2 -> AdminCircularsTab(
@@ -129,6 +145,8 @@ fun AdminScreen(
         else -> CraftStudioScreen(
             currentUser = adminUser,
             projects = craftProjects,
+            likedProjectIds = likedProjectIds,
+            likingProjectIds = likingProjectIds,
             craftAiImageState = craftAiImageState,
             generatingPostId = generatingCraftPostId,
             onGeneratePreviewImage = onGenerateCraftAiImage,
@@ -155,6 +173,9 @@ private fun AdminDashboardTab(
     todayAttendance: List<AttendanceRecord>,
     feeItems: List<FeeItem>,
     payments: List<FeePayment>,
+    campusPosters: List<CampusPoster>,
+    onPublishCampusPoster: (CampusPoster) -> Unit,
+    onDeleteCampusPoster: (CampusPoster) -> Unit,
     onOpenProgressDashboard: () -> Unit,
     onOpenFeePayments: () -> Unit,
     onOpenCraftStudio: () -> Unit,
@@ -176,9 +197,34 @@ private fun AdminDashboardTab(
     val totalPending = feeItems.filter { it.status != "PAID" }.sumOf { it.amount }
     val pendingVerificationCount = payments.count { it.status == "PENDING" }
 
+    val context = LocalContext.current
     var selectedWeek by remember { mutableStateOf(SchoolCatalog.dptWeeks[1]) }
-    var zoomPosterResId by remember { mutableStateOf<Int?>(null) }
-    var zoomPosterTitle by remember { mutableStateOf("") }
+    var zoomPoster by remember { mutableStateOf<CampusPoster?>(null) }
+
+    var posterTitle by remember { mutableStateOf("") }
+    var posterSubtitle by remember { mutableStateOf("") }
+    var posterDate by remember { mutableStateOf(SchoolCatalog.todayIso()) }
+    var posterImageBase64 by remember { mutableStateOf("") }
+
+    val posterPhotoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            readAttachmentFromUri(context, uri, forceImage = true)
+                .onSuccess {
+                    posterImageBase64 = it.base64Data
+                    onShowMessage("Campus poster photo selected!")
+                }
+                .onFailure { onShowMessage(it.localizedMessage ?: "Unable to read photo.") }
+        }
+    }
+
+    val sortedPosters = remember(campusPosters) {
+        campusPosters.sortedWith(
+            compareByDescending<CampusPoster> { it.date }
+                .thenByDescending { it.createdAt?.seconds ?: 0L }
+        )
+    }
 
     val studentDptRanked = remember(students, dptWeekly, selectedWeek) {
         students.map { st ->
@@ -356,42 +402,168 @@ private fun AdminDashboardTab(
             }
         }
 
-        // Bundled Campus Celebration Posters Preview
+        // Daily Campus Celebration / Event Poster Publisher & Live Gallery
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("CAMPUS CELEBRATION POSTERS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                ) {
-                    listOf(
-                        Triple(R.drawable.poster_students_day_nov17, "International Students' Day", "17 Nov • Campus Poster"),
-                        Triple(R.drawable.poster_philanthropy_day_nov15, "National Philanthropy Day", "15 Nov • Kindness Campaign"),
-                    ).forEach { (resId, title, subtitle) ->
-                        Card(
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                            modifier = Modifier
-                                .width(210.dp)
-                                .clickable {
-                                    zoomPosterResId = resId
-                                    zoomPosterTitle = title
-                                },
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, GoldAmber.copy(alpha = 0.7f)),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "DAILY CAMPUS POSTER & EVENT PHOTO",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = GoldAmberDark,
+                    )
+                    Text(
+                        "Upload Today's Event, Celebration or Thought Poster",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    OutlinedTextField(
+                        value = posterTitle,
+                        onValueChange = { posterTitle = it.take(140) },
+                        label = { Text("Poster / Celebration Title (e.g. Science Day)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("admin_poster_title_input"),
+                    )
+                    OutlinedTextField(
+                        value = posterSubtitle,
+                        onValueChange = { posterSubtitle = it.take(180) },
+                        label = { Text("Caption / Highlight (Optional)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("admin_poster_subtitle_input"),
+                    )
+                    SchoolDatePickerField(
+                        label = "Event / Poster Date",
+                        selectedDate = posterDate,
+                        onDateSelected = { posterDate = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        testTagName = "admin_poster_date_picker",
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            posterPhotoPicker.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("admin_poster_pick_photo_btn"),
+                    ) {
+                        Icon(Icons.Filled.AddPhotoAlternate, contentDescription = "Pick Campus Poster Photo", modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (posterImageBase64.isBlank()) "Select Poster Photo from Gallery" else "Change Selected Poster Photo")
+                    }
+
+                    val previewBmp = remember(posterImageBase64) { decodeAttachmentBitmap(posterImageBase64) }
+                    if (previewBmp != null) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, GoldAmber),
+                            modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Column {
-                                Image(
-                                    painter = painterResource(id = resId),
-                                    contentDescription = title,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(130.dp)
-                                        .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)),
+                            Image(
+                                bitmap = previewBmp,
+                                contentDescription = "Selected poster preview",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(170.dp),
+                            )
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            if (posterTitle.isBlank() || posterImageBase64.isBlank()) {
+                                onShowMessage("Please enter a poster title and select a photo first.")
+                                return@Button
+                            }
+                            onPublishCampusPoster(
+                                CampusPoster(
+                                    title = posterTitle.trim(),
+                                    subtitle = posterSubtitle.trim(),
+                                    date = posterDate.ifBlank { SchoolCatalog.todayIso() },
+                                    imageData = posterImageBase64,
+                                    postedBy = adminUser.fullName,
                                 )
-                                Column(modifier = Modifier.padding(10.dp)) {
-                                    Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
-                                    Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            )
+                            posterTitle = ""
+                            posterSubtitle = ""
+                            posterImageBase64 = ""
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("admin_poster_publish_btn"),
+                    ) {
+                        Icon(Icons.Filled.Publish, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Publish Poster to Student Home")
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    Text(
+                        "PUBLISHED CAMPUS POSTERS (${sortedPosters.size})",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (sortedPosters.isEmpty()) {
+                        Text(
+                            "No campus posters uploaded yet. Students will see each poster you publish here.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        ) {
+                            sortedPosters.forEach { poster ->
+                                val bmp = remember(poster.imageData) { decodeAttachmentBitmap(poster.imageData) }
+                                Card(
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                                    modifier = Modifier
+                                        .width(220.dp)
+                                        .clickable { zoomPoster = poster },
+                                ) {
+                                    Column {
+                                        if (bmp != null) {
+                                            Image(
+                                                bitmap = bmp,
+                                                contentDescription = poster.title,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(130.dp)
+                                                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)),
+                                            )
+                                        }
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(10.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(poster.title, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                Text(
+                                                    listOfNotNull(poster.date, poster.subtitle.takeIf { it.isNotBlank() }).joinToString(" • "),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                            IconButton(onClick = { onDeleteCampusPoster(poster) }) {
+                                                Icon(Icons.Filled.Delete, contentDescription = "Delete poster", tint = RoseError)
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -593,29 +765,35 @@ private fun AdminDashboardTab(
         }
     }
 
-    zoomPosterResId?.let { resId ->
-        Dialog(onDismissRequest = { zoomPosterResId = null }) {
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            ) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(zoomPosterTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
-                        IconButton(onClick = { zoomPosterResId = null }) {
-                            Icon(Icons.Filled.Close, contentDescription = "Close poster preview")
+    zoomPoster?.let { poster ->
+        val zoomBmp = remember(poster.imageData) { decodeAttachmentBitmap(poster.imageData) }
+        if (zoomBmp != null) {
+            Dialog(onDismissRequest = { zoomPoster = null }) {
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(poster.title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+                                Text(poster.date, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            IconButton(onClick = { zoomPoster = null }) {
+                                Icon(Icons.Filled.Close, contentDescription = "Close poster preview")
+                            }
                         }
+                        Image(
+                            bitmap = zoomBmp,
+                            contentDescription = poster.title,
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp).clip(RoundedCornerShape(12.dp)),
+                        )
                     }
-                    Image(
-                        painter = painterResource(id = resId),
-                        contentDescription = zoomPosterTitle,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
-                    )
                 }
             }
         }
@@ -647,11 +825,17 @@ private fun AdminAccountsTab(
 
     var classMenuExpanded by remember { mutableStateOf(false) }
 
+    LaunchedEffect(selectedRole, editingDocId, users) {
+        if (editingDocId.isBlank() && selectedRole == "STUDENT") {
+            userId = SchoolCatalog.nextStudentRollNumber(users)
+        }
+    }
+
     fun resetForm() {
         editingDocId = ""
         editingExistingCreatedAt = null
         fullName = ""
-        userId = ""
+        userId = if (selectedRole == "STUDENT") SchoolCatalog.nextStudentRollNumber(users) else ""
         password = ""
         phone = ""
         parentName = ""
@@ -709,7 +893,12 @@ private fun AdminAccountsTab(
                         ).forEach { (rKey, label) ->
                             FilterChip(
                                 selected = selectedRole == rKey,
-                                onClick = { selectedRole = rKey },
+                                onClick = {
+                                    selectedRole = rKey
+                                    if (editingDocId.isBlank()) {
+                                        userId = if (rKey == "STUDENT") SchoolCatalog.nextStudentRollNumber(users) else ""
+                                    }
+                                },
                                 label = { Text(label) },
                                 modifier = Modifier.testTag("admin_create_role_$rKey"),
                             )
@@ -731,13 +920,20 @@ private fun AdminAccountsTab(
                             label = {
                                 Text(
                                     when (selectedRole) {
-                                        "STUDENT" -> "Admission No"
+                                        "STUDENT" -> "Roll / Adm No (Auto)"
                                         "TEACHER" -> "Employee ID"
                                         "ADMIN" -> "Admin ID"
                                         else -> "Staff ID"
                                     }
                                 )
                             },
+                            trailingIcon = if (selectedRole == "STUDENT" && editingDocId.isBlank()) {
+                                {
+                                    IconButton(onClick = { userId = SchoolCatalog.nextStudentRollNumber(users) }) {
+                                        Icon(Icons.Filled.AutoAwesome, contentDescription = "Generate Next Roll No")
+                                    }
+                                }
+                            } else null,
                             singleLine = true,
                             modifier = Modifier.weight(1f).testTag("admin_userid_input"),
                         )
@@ -982,11 +1178,37 @@ private fun AdminCircularsTab(
     onShowMessage: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     var title by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("Notice") }
-    var audience by remember { mutableStateOf("All Wings") }
+    var selectedTargetScope by remember { mutableStateOf("All Classes") }
+    var selectedTargetSection by remember { mutableStateOf("ALL") }
+    var classDropdownExpanded by remember { mutableStateOf(false) }
     var date by remember { mutableStateOf(SchoolCatalog.todayIso()) }
     var content by remember { mutableStateOf("") }
+    var pendingAttachment by remember { mutableStateOf<PickedAttachment?>(null) }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+        onResult = { uri ->
+            if (uri != null) {
+                readAttachmentFromUri(context, uri, forceImage = true)
+                    .onSuccess { pendingAttachment = it }
+                    .onFailure { onShowMessage(it.localizedMessage ?: "Unable to read photo.") }
+            }
+        },
+    )
+
+    val documentPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+        onResult = { uri ->
+            if (uri != null) {
+                readAttachmentFromUri(context, uri, forceImage = false)
+                    .onSuccess { pendingAttachment = it }
+                    .onFailure { onShowMessage(it.localizedMessage ?: "Unable to read document.") }
+            }
+        },
+    )
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -1001,11 +1223,11 @@ private fun AdminCircularsTab(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Principal Circular & Broadcast", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                    Text("Principal Circular & Holiday Notice", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                     OutlinedTextField(
                         value = title,
                         onValueChange = { title = it },
-                        label = { Text("Circular Title") },
+                        label = { Text("Circular / Holiday Title") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("circular_title_input"),
                     )
@@ -1017,22 +1239,96 @@ private fun AdminCircularsTab(
                             FilterChip(selected = category == cat, onClick = { category = cat }, label = { Text(cat) })
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedTextField(
-                            value = audience,
-                            onValueChange = { audience = it },
-                            label = { Text("Target Audience") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                        OutlinedTextField(
-                            value = date,
-                            onValueChange = { date = it },
-                            label = { Text("Date") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
+
+                    // Target Class / Wing Dropdown (Select, don't type)
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = { classDropdownExpanded = true },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 52.dp)
+                                .testTag("admin_circular_class_dropdown"),
+                        ) {
+                            Icon(Icons.Filled.Class, contentDescription = "Select Class", modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Target Class / Wing", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    text = if (selectedTargetScope in SchoolCatalog.allClasses) {
+                                        val secLabel = if (selectedTargetSection == "ALL") "All Sections" else "Section $selectedTargetSection"
+                                        "$selectedTargetScope ($secLabel)"
+                                    } else {
+                                        selectedTargetScope
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                            Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
+                        }
+                        DropdownMenu(
+                            expanded = classDropdownExpanded,
+                            onDismissRequest = { classDropdownExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("All Classes (Entire School)") },
+                                onClick = {
+                                    selectedTargetScope = "All Classes"
+                                    classDropdownExpanded = false
+                                },
+                            )
+                            SchoolCatalog.wings.forEach { wing ->
+                                DropdownMenuItem(
+                                    text = { Text("Wing: ${wing.name} (${wing.classesLabel})") },
+                                    onClick = {
+                                        selectedTargetScope = "Wing: ${wing.name}"
+                                        classDropdownExpanded = false
+                                    },
+                                )
+                            }
+                            HorizontalDivider()
+                            SchoolCatalog.allClasses.forEach { cls ->
+                                DropdownMenuItem(
+                                    text = { Text("$cls (${SchoolCatalog.wingForClass(cls)})") },
+                                    onClick = {
+                                        selectedTargetScope = cls
+                                        classDropdownExpanded = false
+                                    },
+                                )
+                            }
+                        }
                     }
+
+                    if (selectedTargetScope in SchoolCatalog.allClasses) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        ) {
+                            FilterChip(
+                                selected = selectedTargetSection == "ALL",
+                                onClick = { selectedTargetSection = "ALL" },
+                                label = { Text("All Sections") },
+                            )
+                            SchoolCatalog.sections.forEach { sec ->
+                                FilterChip(
+                                    selected = selectedTargetSection == sec,
+                                    onClick = { selectedTargetSection = sec },
+                                    label = { Text("Sec $sec") },
+                                )
+                            }
+                        }
+                    }
+
+                    SchoolDatePickerField(
+                        label = "Circular / Holiday Date",
+                        selectedDate = date,
+                        onDateSelected = { date = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        testTagName = "admin_circular_date_picker",
+                    )
+
                     OutlinedTextField(
                         value = content,
                         onValueChange = { content = it },
@@ -1040,21 +1336,82 @@ private fun AdminCircularsTab(
                         minLines = 3,
                         modifier = Modifier.fillMaxWidth().testTag("circular_content_input"),
                     )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = {
+                                photoPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                        ) {
+                            Icon(Icons.Filled.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Attach Photo", style = MaterialTheme.typography.labelSmall)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                documentPickerLauncher.launch(
+                                    arrayOf(
+                                        "application/pdf",
+                                        "application/msword",
+                                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                        "text/plain",
+                                        "image/*",
+                                    )
+                                )
+                            },
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                        ) {
+                            Icon(Icons.Filled.AttachFile, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Attach Doc/PDF", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    AttachmentPickerChip(
+                        attachment = pendingAttachment,
+                        onClear = { pendingAttachment = null },
+                    )
+
                     Button(
                         onClick = {
-                            if (title.isBlank() || content.isBlank()) return@Button
+                            if (title.isBlank() || content.isBlank()) {
+                                onShowMessage("Please enter circular title and announcement details.")
+                                return@Button
+                            }
+                            val tClass = if (selectedTargetScope in SchoolCatalog.allClasses) selectedTargetScope else ""
+                            val tSection = if (tClass.isNotBlank() && selectedTargetSection != "ALL") selectedTargetSection else ""
+                            val tWing = when {
+                                tClass.isNotBlank() -> SchoolCatalog.wingForClass(tClass)
+                                selectedTargetScope.startsWith("Wing: ") -> selectedTargetScope.removePrefix("Wing: ").trim()
+                                else -> ""
+                            }
+                            val audLabel = when {
+                                tClass.isNotBlank() && tSection.isNotBlank() -> "$tClass-$tSection"
+                                tClass.isNotBlank() -> "$tClass (All Sections)"
+                                tWing.isNotBlank() -> tWing
+                                else -> "All Classes"
+                            }
+
                             onPostCircular(
                                 Circular(
                                     title = title.trim(),
                                     category = category,
-                                    audience = audience.trim().ifBlank { "All Wings" },
-                                    date = date.trim().ifBlank { SchoolCatalog.todayIso() },
+                                    audience = audLabel,
+                                    targetWing = tWing,
+                                    targetClass = tClass,
+                                    targetSection = tSection,
+                                    date = date.ifBlank { SchoolCatalog.todayIso() },
                                     content = content.trim(),
                                     postedBy = adminUser.fullName,
+                                    senderRole = "ADMIN",
+                                    attachmentName = pendingAttachment?.name ?: "",
+                                    attachmentMimeType = pendingAttachment?.mimeType ?: "",
+                                    attachmentData = pendingAttachment?.base64Data ?: "",
                                 )
                             )
                             title = ""
                             content = ""
+                            pendingAttachment = null
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
                         shape = RoundedCornerShape(12.dp),
@@ -1062,7 +1419,7 @@ private fun AdminCircularsTab(
                     ) {
                         Icon(Icons.Filled.Campaign, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Broadcast Circular to All Roles")
+                        Text("Publish Circular / Holiday Notice")
                     }
                 }
             }

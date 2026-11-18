@@ -13,6 +13,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,9 +26,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.data.model.*
+import com.example.data.model.SchoolCatalog.toSlotMap
 import com.example.ui.components.AttachmentPickerChip
 import com.example.ui.components.AttachmentPreviewBlock
 import com.example.ui.components.PickedAttachment
+import com.example.ui.components.SchoolDatePickerField
 import com.example.ui.components.StudentDptResultCard
 import com.example.ui.components.readAttachmentFromUri
 import com.example.ui.theme.*
@@ -46,7 +49,10 @@ fun TeacherScreen(
     leaves: List<LeaveRequest>,
     homework: List<HomeworkItem>,
     doubts: List<DoubtMessage>,
+    timetables: List<ClassTimetable> = emptyList(),
     craftProjects: List<CraftProject> = emptyList(),
+    likedProjectIds: Set<String> = emptySet(),
+    likingProjectIds: Set<String> = emptySet(),
     craftAiImageState: CraftAiImageState = CraftAiImageState.Idle,
     generatingCraftPostId: String? = null,
     onSaveDailyDpt: (DptDaily) -> Unit,
@@ -59,6 +65,9 @@ fun TeacherScreen(
     onPublishTermMarks: (TermMarkCard) -> Unit,
     onReplyDoubt: (String, String, String) -> Unit,
     onDeleteRecord: (String, String, String) -> Unit,
+    onSaveStudent: (SchoolUser) -> Unit = {},
+    onDeleteStudent: (SchoolUser) -> Unit = {},
+    onSaveTimetable: (String, String, List<SchoolCatalog.TimetableSlot>, String) -> Unit = { _, _, _, _ -> },
     onGenerateCraftAiImage: (String, String, String, String) -> Unit = { _, _, _, _ -> },
     onClearCraftPreview: () -> Unit = {},
     onPublishCraftProject: (CraftProject) -> Unit = {},
@@ -80,6 +89,8 @@ fun TeacherScreen(
     var selectedDate by remember { mutableStateOf(SchoolCatalog.todayIso()) }
     var showStudentProgressDashboard by remember { mutableStateOf(false) }
     var showCraftStudioOverlay by remember { mutableStateOf(false) }
+    var showClassStudentsOverlay by remember { mutableStateOf(false) }
+    var showTimetableOverlay by remember { mutableStateOf(false) }
 
     val allStudents = remember(users) {
         users.filter { it.role == "STUDENT" }.sortedBy { it.userId }
@@ -90,11 +101,42 @@ fun TeacherScreen(
         }
     }
 
+    if (showClassStudentsOverlay) {
+        BackHandler { showClassStudentsOverlay = false }
+        TeacherClassStudentsView(
+            teacher = teacher,
+            allUsers = users,
+            onSaveStudent = onSaveStudent,
+            onDeleteStudent = onDeleteStudent,
+            onShowMessage = onShowMessage,
+            onBack = { showClassStudentsOverlay = false },
+            modifier = modifier,
+        )
+        return
+    }
+
+    if (showTimetableOverlay) {
+        BackHandler { showTimetableOverlay = false }
+        TeacherTimetableEditorView(
+            teacher = teacher,
+            initialClass = selectedClass,
+            initialSection = selectedSection,
+            timetables = timetables,
+            onSaveTimetable = onSaveTimetable,
+            onShowMessage = onShowMessage,
+            onBack = { showTimetableOverlay = false },
+            modifier = modifier,
+        )
+        return
+    }
+
     if (showCraftStudioOverlay) {
         BackHandler { showCraftStudioOverlay = false }
         CraftStudioScreen(
             currentUser = teacher,
             projects = craftProjects,
+            likedProjectIds = likedProjectIds,
+            likingProjectIds = likingProjectIds,
             craftAiImageState = craftAiImageState,
             generatingPostId = generatingCraftPostId,
             onGeneratePreviewImage = onGenerateCraftAiImage,
@@ -148,7 +190,7 @@ fun TeacherScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(teacher.fullName, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                         Text(
-                            "${teacher.userId} • ${teacher.subject.ifBlank { "Faculty" }} • Ph: ${teacher.phone}",
+                            "${teacher.userId} • ${teacher.subject.ifBlank { "Faculty" }} • Class: ${teacher.className}-${teacher.section}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -228,6 +270,18 @@ fun TeacherScreen(
                         label = { Text(selectedDate) },
                         leadingIcon = { Icon(Icons.Filled.CalendarToday, contentDescription = null, modifier = Modifier.size(16.dp)) },
                     )
+                    AssistChip(
+                        onClick = { showClassStudentsOverlay = true },
+                        label = { Text("My Students (${teacher.className}-${teacher.section})") },
+                        leadingIcon = { Icon(Icons.Filled.PersonAdd, contentDescription = "Add Class Students", modifier = Modifier.size(16.dp)) },
+                        modifier = Modifier.testTag("teacher_bar_students_chip"),
+                    )
+                    AssistChip(
+                        onClick = { showTimetableOverlay = true },
+                        label = { Text("Timetable ($selectedClass-$selectedSection)") },
+                        leadingIcon = { Icon(Icons.Filled.Schedule, contentDescription = "Edit Timetable", modifier = Modifier.size(16.dp)) },
+                        modifier = Modifier.testTag("teacher_bar_timetable_chip"),
+                    )
                 }
             }
         }
@@ -266,6 +320,7 @@ fun TeacherScreen(
                 onMarkAttendance = onMarkAttendance,
                 onMarkAllPresent = onMarkAllPresent,
                 onUpdateLeaveStatus = onUpdateLeaveStatus,
+                onOpenManageClassStudents = { showClassStudentsOverlay = true },
             )
             3 -> TeacherNoticesTab(
                 teacher = teacher,
@@ -279,6 +334,7 @@ fun TeacherScreen(
             )
             else -> TeacherDiaryOrCraftTab(
                 teacher = teacher,
+                allUsers = users,
                 selectedClass = selectedClass,
                 selectedSection = selectedSection,
                 selectedSubject = selectedSubject,
@@ -286,13 +342,19 @@ fun TeacherScreen(
                 classStudents = classStudents,
                 homework = homework,
                 doubts = doubts,
+                timetables = timetables,
                 craftProjects = craftProjects,
+                likedProjectIds = likedProjectIds,
+                likingProjectIds = likingProjectIds,
                 craftAiImageState = craftAiImageState,
                 generatingCraftPostId = generatingCraftPostId,
                 onPostHomework = onPostHomework,
                 onPublishTermMarks = onPublishTermMarks,
                 onReplyDoubt = onReplyDoubt,
                 onDeleteHomework = { onDeleteRecord("homework", it.id, it.title) },
+                onSaveStudent = onSaveStudent,
+                onDeleteStudent = onDeleteStudent,
+                onSaveTimetable = onSaveTimetable,
                 onGenerateCraftAiImage = onGenerateCraftAiImage,
                 onClearCraftPreview = onClearCraftPreview,
                 onPublishCraftProject = onPublishCraftProject,
@@ -305,9 +367,17 @@ fun TeacherScreen(
     }
 }
 
+private enum class TeacherAcademicSubTab(val label: String) {
+    DIARY_MARKS("Diary & Marks"),
+    TIMETABLE("Timetable"),
+    CLASS_STUDENTS("My Students"),
+    CRAFT_STUDIO("Projects"),
+}
+
 @Composable
 private fun TeacherDiaryOrCraftTab(
     teacher: SchoolUser,
+    allUsers: List<SchoolUser>,
     selectedClass: String,
     selectedSection: String,
     selectedSubject: String,
@@ -315,13 +385,19 @@ private fun TeacherDiaryOrCraftTab(
     classStudents: List<SchoolUser>,
     homework: List<HomeworkItem>,
     doubts: List<DoubtMessage>,
+    timetables: List<ClassTimetable>,
     craftProjects: List<CraftProject>,
+    likedProjectIds: Set<String>,
+    likingProjectIds: Set<String>,
     craftAiImageState: CraftAiImageState,
     generatingCraftPostId: String?,
     onPostHomework: (HomeworkItem) -> Unit,
     onPublishTermMarks: (TermMarkCard) -> Unit,
     onReplyDoubt: (String, String, String) -> Unit,
     onDeleteHomework: (HomeworkItem) -> Unit,
+    onSaveStudent: (SchoolUser) -> Unit,
+    onDeleteStudent: (SchoolUser) -> Unit,
+    onSaveTimetable: (String, String, List<SchoolCatalog.TimetableSlot>, String) -> Unit,
     onGenerateCraftAiImage: (String, String, String, String) -> Unit,
     onClearCraftPreview: () -> Unit,
     onPublishCraftProject: (CraftProject) -> Unit,
@@ -330,36 +406,47 @@ private fun TeacherDiaryOrCraftTab(
     onDeleteCraftProject: (CraftProject) -> Unit,
     onShowMessage: (String) -> Unit,
 ) {
-    var showCraftSubTab by remember { mutableStateOf(false) }
-    BackHandler(enabled = showCraftSubTab) { showCraftSubTab = false }
+    var activeSubTab by remember { mutableStateOf(TeacherAcademicSubTab.DIARY_MARKS) }
+    BackHandler(enabled = activeSubTab != TeacherAcademicSubTab.DIARY_MARKS) {
+        activeSubTab = TeacherAcademicSubTab.DIARY_MARKS
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            FilterChip(
-                selected = !showCraftSubTab,
-                onClick = { showCraftSubTab = false },
-                label = { Text("Diary & Marks") },
-                leadingIcon = { Icon(Icons.Filled.MenuBook, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                modifier = Modifier.weight(1f).testTag("teacher_subtab_diary"),
-            )
-            FilterChip(
-                selected = showCraftSubTab,
-                onClick = { showCraftSubTab = true },
-                label = { Text("Craft & Skill AI") },
-                leadingIcon = { Icon(Icons.Filled.Brush, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                modifier = Modifier.weight(1f).testTag("teacher_subtab_craft_ai"),
-            )
+            TeacherAcademicSubTab.entries.forEach { tab ->
+                FilterChip(
+                    selected = activeSubTab == tab,
+                    onClick = { activeSubTab = tab },
+                    label = { Text(tab.label) },
+                    leadingIcon = {
+                        Icon(
+                            when (tab) {
+                                TeacherAcademicSubTab.DIARY_MARKS -> Icons.Filled.MenuBook
+                                TeacherAcademicSubTab.TIMETABLE -> Icons.Filled.Schedule
+                                TeacherAcademicSubTab.CLASS_STUDENTS -> Icons.Filled.PersonAdd
+                                TeacherAcademicSubTab.CRAFT_STUDIO -> Icons.Filled.Brush
+                            },
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    },
+                    modifier = Modifier.testTag("teacher_subtab_${tab.name.lowercase()}"),
+                )
+            }
         }
 
-        if (showCraftSubTab) {
-            CraftStudioScreen(
+        when (activeSubTab) {
+            TeacherAcademicSubTab.CRAFT_STUDIO -> CraftStudioScreen(
                 currentUser = teacher,
                 projects = craftProjects,
+                likedProjectIds = likedProjectIds,
+                likingProjectIds = likingProjectIds,
                 craftAiImageState = craftAiImageState,
                 generatingPostId = generatingCraftPostId,
                 onGeneratePreviewImage = onGenerateCraftAiImage,
@@ -369,11 +456,27 @@ private fun TeacherDiaryOrCraftTab(
                 onApplaudPost = onApplaudCraftProject,
                 onDeletePost = onDeleteCraftProject,
                 onShowMessage = onShowMessage,
-                onBack = { showCraftSubTab = false },
+                onBack = { activeSubTab = TeacherAcademicSubTab.DIARY_MARKS },
                 modifier = Modifier.weight(1f),
             )
-        } else {
-            Box(modifier = Modifier.weight(1f)) {
+            TeacherAcademicSubTab.TIMETABLE -> TeacherTimetableEditorView(
+                teacher = teacher,
+                initialClass = selectedClass,
+                initialSection = selectedSection,
+                timetables = timetables,
+                onSaveTimetable = onSaveTimetable,
+                onShowMessage = onShowMessage,
+                modifier = Modifier.weight(1f),
+            )
+            TeacherAcademicSubTab.CLASS_STUDENTS -> TeacherClassStudentsView(
+                teacher = teacher,
+                allUsers = allUsers,
+                onSaveStudent = onSaveStudent,
+                onDeleteStudent = onDeleteStudent,
+                onShowMessage = onShowMessage,
+                modifier = Modifier.weight(1f),
+            )
+            TeacherAcademicSubTab.DIARY_MARKS -> Box(modifier = Modifier.weight(1f)) {
                 DiaryMarksDoubtsTab(
                     teacher = teacher,
                     selectedClass = selectedClass,
@@ -958,6 +1061,7 @@ private fun AttendanceAndLeaveTab(
     onMarkAttendance: (AttendanceRecord) -> Unit,
     onMarkAllPresent: (List<SchoolUser>, String, String, String, String) -> Unit,
     onUpdateLeaveStatus: (String, String, String) -> Unit,
+    onOpenManageClassStudents: () -> Unit,
 ) {
     val remarkInputs = remember { mutableStateMapOf<String, String>() }
 
@@ -966,6 +1070,44 @@ private fun AttendanceAndLeaveTab(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = GoldSoft),
+                border = BorderStroke(1.dp, GoldAmber),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "My Class Roster: ${teacher.className.ifBlank { "Class" }}-${teacher.section}",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = NavyDeep,
+                        )
+                        Text(
+                            "Add or manage students of your assigned class with auto roll numbers (001, 002...).",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = NavyRoyal,
+                        )
+                    }
+                    FilledTonalButton(
+                        onClick = onOpenManageClassStudents,
+                        colors = ButtonDefaults.filledTonalButtonColors(containerColor = NavyDeep, contentColor = GoldAmber),
+                        modifier = Modifier.testTag("teacher_manage_class_students_btn"),
+                    ) {
+                        Icon(Icons.Filled.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Students")
+                    }
+                }
+            }
+        }
+
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1299,6 +1441,561 @@ private fun DiaryMarksDoubtsTab(
                             colors = ButtonDefaults.buttonColors(containerColor = NavyRoyal, contentColor = Color.White),
                         ) { Text("Send Reply") }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TeacherClassStudentsView(
+    teacher: SchoolUser,
+    allUsers: List<SchoolUser>,
+    onSaveStudent: (SchoolUser) -> Unit,
+    onDeleteStudent: (SchoolUser) -> Unit,
+    onShowMessage: (String) -> Unit,
+    onBack: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    val assignedClass = teacher.className.trim()
+    val assignedSection = teacher.section.trim()
+    val hasAssignedClass = assignedClass.isNotBlank() && assignedSection.isNotBlank()
+    val assignedWing = remember(assignedClass) {
+        if (assignedClass.isNotBlank()) SchoolCatalog.wingForClass(assignedClass) else teacher.wing
+    }
+
+    val myStudents = remember(allUsers, assignedClass, assignedSection) {
+        allUsers
+            .filter { it.role == "STUDENT" && it.className == assignedClass && it.section == assignedSection }
+            .sortedBy { it.userId }
+    }
+
+    var editingDocId by remember { mutableStateOf("") }
+    var editingCreatedAt by remember { mutableStateOf<com.google.firebase.Timestamp?>(null) }
+    var fullName by remember { mutableStateOf("") }
+    var rollNo by remember(allUsers) { mutableStateOf(SchoolCatalog.nextStudentRollNumber(allUsers)) }
+    var password by remember { mutableStateOf("stud123") }
+    var parentName by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf("") }
+    var monthlyTuition by remember { mutableStateOf("2500") }
+    var transportFee by remember { mutableStateOf("0") }
+
+    LaunchedEffect(allUsers, editingDocId) {
+        if (editingDocId.isBlank()) {
+            rollNo = SchoolCatalog.nextStudentRollNumber(allUsers)
+        }
+    }
+
+    fun resetStudentForm() {
+        editingDocId = ""
+        editingCreatedAt = null
+        fullName = ""
+        rollNo = SchoolCatalog.nextStudentRollNumber(allUsers)
+        password = "stud123"
+        parentName = ""
+        phone = ""
+    }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize().testTag("teacher_class_students_view"),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = NavyDeep),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (onBack != null) {
+                        IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = GoldAmber)
+                        }
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("MY ASSIGNED CLASS STUDENTS", style = MaterialTheme.typography.labelSmall, color = GoldAmber)
+                        Text(
+                            if (hasAssignedClass) "$assignedClass - Section $assignedSection ($assignedWing)"
+                            else "No Assigned Class",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = Color.White,
+                        )
+                        Text(
+                            "Teachers can add and manage students strictly within their assigned class-section.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.8f),
+                        )
+                    }
+                }
+            }
+        }
+
+        if (!hasAssignedClass) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, RoseError),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        "Your teacher account does not have an assigned Class & Section yet. Ask Principal/Admin to assign your class.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = RoseError,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                }
+            }
+            return@LazyColumn
+        }
+
+        item {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (editingDocId.isBlank()) "Add Student to $assignedClass-$assignedSection"
+                            else "Edit Student ($assignedClass-$assignedSection)",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        if (editingDocId.isNotBlank()) {
+                            TextButton(onClick = { resetStudentForm() }) { Text("Cancel") }
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = fullName,
+                        onValueChange = { fullName = it },
+                        label = { Text("Student Full Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("teacher_student_name_input"),
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = rollNo,
+                            onValueChange = { rollNo = it },
+                            label = { Text("Roll / Adm No (Auto)") },
+                            trailingIcon = if (editingDocId.isBlank()) {
+                                {
+                                    IconButton(onClick = { rollNo = SchoolCatalog.nextStudentRollNumber(allUsers) }) {
+                                        Icon(Icons.Filled.AutoAwesome, contentDescription = "Auto Next Roll No")
+                                    }
+                                }
+                            } else null,
+                            singleLine = true,
+                            modifier = Modifier.weight(1f).testTag("teacher_student_roll_input"),
+                        )
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            label = { Text("Parent Login Password") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f).testTag("teacher_student_pw_input"),
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = parentName,
+                        onValueChange = { parentName = it },
+                        label = { Text("Father / Mother Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = phone,
+                        onValueChange = { phone = it },
+                        label = { Text("Parent Mobile Number") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = monthlyTuition,
+                            onValueChange = { monthlyTuition = it.filter { ch -> ch.isDigit() } },
+                            label = { Text("Monthly Tuition (₹)") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f),
+                        )
+                        OutlinedTextField(
+                            value = transportFee,
+                            onValueChange = { transportFee = it.filter { ch -> ch.isDigit() } },
+                            label = { Text("Bus Fee (₹)") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+
+                    Button(
+                        onClick = {
+                            if (fullName.isBlank() || password.isBlank()) {
+                                onShowMessage("Please enter student full name and password.")
+                                return@Button
+                            }
+                            onSaveStudent(
+                                SchoolUser(
+                                    id = editingDocId,
+                                    role = "STUDENT",
+                                    userId = rollNo.trim().ifBlank { SchoolCatalog.nextStudentRollNumber(allUsers) },
+                                    password = password.trim(),
+                                    fullName = fullName.trim(),
+                                    phone = phone.trim(),
+                                    wing = assignedWing,
+                                    className = assignedClass,
+                                    section = assignedSection,
+                                    parentName = parentName.trim(),
+                                    monthlyTuition = monthlyTuition.toLongOrNull() ?: 0L,
+                                    transportFee = transportFee.toLongOrNull() ?: 0L,
+                                    createdAt = editingCreatedAt,
+                                )
+                            )
+                            resetStudentForm()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("teacher_save_student_btn"),
+                    ) {
+                        Icon(Icons.Filled.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (editingDocId.isBlank()) "Add Student to $assignedClass-$assignedSection" else "Save Student Changes")
+                    }
+                }
+            }
+        }
+
+        item {
+            Text(
+                "$assignedClass-$assignedSection ROSTER (${myStudents.size} Students)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        if (myStudents.isEmpty()) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        "No students in $assignedClass-$assignedSection yet. Add the first student (Roll 001) above!",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                }
+            }
+        } else {
+            items(myStudents, key = { it.id }) { st ->
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(st.fullName, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                            Text("Roll / ID: ${st.userId} • PW: ${st.password}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            Text("Parent: ${st.parentName.ifBlank { "—" }} • Ph: ${st.phone.ifBlank { "—" }}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Row {
+                            IconButton(
+                                onClick = {
+                                    editingDocId = st.id
+                                    editingCreatedAt = st.createdAt
+                                    fullName = st.fullName
+                                    rollNo = st.userId
+                                    password = st.password
+                                    parentName = st.parentName
+                                    phone = st.phone
+                                    monthlyTuition = st.monthlyTuition.toString()
+                                    transportFee = st.transportFee.toString()
+                                },
+                            ) {
+                                Icon(Icons.Filled.Edit, contentDescription = "Edit ${st.fullName}", tint = MaterialTheme.colorScheme.primary)
+                            }
+                            IconButton(onClick = { onDeleteStudent(st) }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Delete ${st.fullName}", tint = RoseError)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TeacherTimetableEditorView(
+    teacher: SchoolUser,
+    initialClass: String,
+    initialSection: String,
+    timetables: List<ClassTimetable>,
+    onSaveTimetable: (String, String, List<SchoolCatalog.TimetableSlot>, String) -> Unit,
+    onShowMessage: (String) -> Unit,
+    onBack: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    var ttClass by remember(initialClass) { mutableStateOf(initialClass.ifBlank { "Class VII" }) }
+    var ttSection by remember(initialSection) { mutableStateOf(initialSection.ifBlank { "A" }) }
+    var classDropdownExpanded by remember { mutableStateOf(false) }
+
+    val savedDoc = remember(timetables, ttClass, ttSection) {
+        timetables.firstOrNull { it.className == ttClass && it.section == ttSection }
+    }
+
+    val editableSlots = remember(ttClass, ttSection, savedDoc) {
+        val loaded = savedDoc?.slots?.map { SchoolCatalog.slotFromMap(it) }
+            ?.takeIf { it.isNotEmpty() }
+            ?: SchoolCatalog.defaultTimetableSlotsFor(ttClass, ttSection)
+        mutableStateListOf<SchoolCatalog.TimetableSlot>().apply { addAll(loaded) }
+    }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize().testTag("teacher_timetable_editor"),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = NavyDeep),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (onBack != null) {
+                        IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = GoldAmber)
+                        }
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("CLASS-WISE TIMETABLE EDITOR", style = MaterialTheme.typography.labelSmall, color = GoldAmber)
+                        Text("$ttClass - Section $ttSection", style = MaterialTheme.typography.titleLarge, color = Color.White)
+                        Text(
+                            if (savedDoc != null) "Custom Timetable Saved • Last edited by ${savedDoc.updatedBy}"
+                            else "Using Default Template • Edit & Save separately per Class-Section",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.8f),
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Select Class & Section to Edit Independently", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = { classDropdownExpanded = true },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp).testTag("tt_class_dropdown"),
+                        ) {
+                            Icon(Icons.Filled.Class, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("$ttClass (${SchoolCatalog.wingForClass(ttClass)})", modifier = Modifier.weight(1f))
+                            Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
+                        }
+                        DropdownMenu(expanded = classDropdownExpanded, onDismissRequest = { classDropdownExpanded = false }) {
+                            SchoolCatalog.allClasses.forEach { cls ->
+                                DropdownMenuItem(
+                                    text = { Text("$cls (${SchoolCatalog.wingForClass(cls)})") },
+                                    onClick = {
+                                        ttClass = cls
+                                        classDropdownExpanded = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SchoolCatalog.sections.forEach { sec ->
+                            FilterChip(
+                                selected = ttSection == sec,
+                                onClick = { ttSection = sec },
+                                label = { Text("Section $sec") },
+                                modifier = Modifier.testTag("tt_section_chip_$sec"),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        items(editableSlots.indices.toList(), key = { idx -> "${ttClass}_${ttSection}_$idx" }) { idx ->
+            val slot = editableSlots[idx]
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Slot #${idx + 1}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                        if (editableSlots.size > 1) {
+                            IconButton(onClick = { editableSlots.removeAt(idx) }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Remove slot", tint = RoseError)
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = slot.period,
+                            onValueChange = { editableSlots[idx] = slot.copy(period = it.take(30)) },
+                            label = { Text("Period") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        OutlinedTextField(
+                            value = slot.time,
+                            onValueChange = { editableSlots[idx] = slot.copy(time = it.take(30)) },
+                            label = { Text("Time") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = slot.mon,
+                            onValueChange = { editableSlots[idx] = slot.copy(mon = it.take(40)) },
+                            label = { Text("Mon") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        OutlinedTextField(
+                            value = slot.tue,
+                            onValueChange = { editableSlots[idx] = slot.copy(tue = it.take(40)) },
+                            label = { Text("Tue") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        OutlinedTextField(
+                            value = slot.wed,
+                            onValueChange = { editableSlots[idx] = slot.copy(wed = it.take(40)) },
+                            label = { Text("Wed") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = slot.thu,
+                            onValueChange = { editableSlots[idx] = slot.copy(thu = it.take(40)) },
+                            label = { Text("Thu") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        OutlinedTextField(
+                            value = slot.fri,
+                            onValueChange = { editableSlots[idx] = slot.copy(fri = it.take(40)) },
+                            label = { Text("Fri") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        OutlinedTextField(
+                            value = slot.sat,
+                            onValueChange = { editableSlots[idx] = slot.copy(sat = it.take(40)) },
+                            label = { Text("Sat") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = {
+                            if (editableSlots.size < 16) {
+                                editableSlots.add(
+                                    SchoolCatalog.TimetableSlot(
+                                        period = "Period ${editableSlots.size + 1}",
+                                        time = "01:10 - 01:50",
+                                        mon = "Self Study",
+                                        tue = "Self Study",
+                                        wed = "Self Study",
+                                        thu = "Self Study",
+                                        fri = "Self Study",
+                                        sat = "Club",
+                                    )
+                                )
+                            }
+                        },
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Add Period")
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            editableSlots.clear()
+                            editableSlots.addAll(SchoolCatalog.defaultTimetableSlotsFor(ttClass, ttSection))
+                            onShowMessage("Reset draft to $ttClass-$ttSection default schedule.")
+                        },
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                    ) {
+                        Icon(Icons.Filled.RestartAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Reset Default")
+                    }
+                }
+                Button(
+                    onClick = {
+                        onSaveTimetable(ttClass, ttSection, editableSlots.toList(), teacher.fullName)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().height(50.dp).testTag("tt_save_btn"),
+                ) {
+                    Icon(Icons.Filled.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Save Timetable for $ttClass-$ttSection", fontWeight = FontWeight.Bold)
                 }
             }
         }

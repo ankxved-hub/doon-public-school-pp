@@ -166,6 +166,10 @@ private fun AuthenticatedSchoolShell(
     val paymentsUi by viewModel.paymentsState.collectAsStateWithLifecycle()
     val doubtsUi by viewModel.doubtsState.collectAsStateWithLifecycle()
     val craftProjectsUi by viewModel.craftProjectsState.collectAsStateWithLifecycle()
+    val campusPostersUi by viewModel.campusPostersState.collectAsStateWithLifecycle()
+    val timetablesUi by viewModel.timetablesState.collectAsStateWithLifecycle()
+    val likedProjectIds by viewModel.likedProjectIds.collectAsStateWithLifecycle()
+    val likingProjectIds by viewModel.likingProjectIds.collectAsStateWithLifecycle()
     val aiMessages by viewModel.aiMessages.collectAsStateWithLifecycle()
     val aiTutorState by viewModel.aiTutorState.collectAsStateWithLifecycle()
     val aiPersona by viewModel.aiPersona.collectAsStateWithLifecycle()
@@ -185,6 +189,8 @@ private fun AuthenticatedSchoolShell(
     val payments = (paymentsUi as? DataUiState.Success)?.data ?: emptyList()
     val doubts = (doubtsUi as? DataUiState.Success)?.data ?: emptyList()
     val craftProjects = (craftProjectsUi as? DataUiState.Success)?.data ?: emptyList()
+    val campusPosters = (campusPostersUi as? DataUiState.Success)?.data ?: emptyList()
+    val timetables = (timetablesUi as? DataUiState.Success)?.data ?: emptyList()
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(toastMessage) {
@@ -424,11 +430,16 @@ private fun AuthenticatedSchoolShell(
                             feeItems = feeItems,
                             payments = payments,
                             craftProjects = craftProjects,
+                            likedProjectIds = likedProjectIds,
+                            likingProjectIds = likingProjectIds,
+                            campusPosters = campusPosters,
                             craftAiImageState = craftAiImageState,
                             generatingCraftPostId = generatingCraftPostId,
                             onSaveUser = { viewModel.saveUserAccount(it) },
+                            onDeleteUser = { viewModel.deleteUser(it) },
                             onDeleteRecord = { col, id, lbl -> viewModel.deleteRecord(col, id, lbl) },
                             onPostCircular = { viewModel.postCircular(it) },
+                            onPublishCampusPoster = { viewModel.publishCampusPoster(it) },
                             onGenerateCraftAiImage = { t, cat, desc, mat -> viewModel.generateCraftAiImage(t, cat, desc, mat) },
                             onClearCraftPreview = { viewModel.clearCraftAiImageState() },
                             onPublishCraftProject = { viewModel.publishCraftProject(it) },
@@ -450,7 +461,10 @@ private fun AuthenticatedSchoolShell(
                             leaves = leaves,
                             homework = homework,
                             doubts = doubts,
+                            timetables = timetables,
                             craftProjects = craftProjects,
+                            likedProjectIds = likedProjectIds,
+                            likingProjectIds = likingProjectIds,
                             craftAiImageState = craftAiImageState,
                             generatingCraftPostId = generatingCraftPostId,
                             onSaveDailyDpt = { viewModel.saveDailyDpt(it) },
@@ -463,6 +477,9 @@ private fun AuthenticatedSchoolShell(
                             onPublishTermMarks = { viewModel.publishTermMarks(it) },
                             onReplyDoubt = { id, rep, by -> viewModel.replyDoubt(id, rep, by) },
                             onDeleteRecord = { col, id, lbl -> viewModel.deleteRecord(col, id, lbl) },
+                            onSaveStudent = { viewModel.saveUserAccount(it) },
+                            onDeleteStudent = { viewModel.deleteUser(it) },
+                            onSaveTimetable = { cls, sec, slots, by -> viewModel.saveTimetable(cls, sec, slots, by) },
                             onGenerateCraftAiImage = { t, cat, desc, mat -> viewModel.generateCraftAiImage(t, cat, desc, mat) },
                             onClearCraftPreview = { viewModel.clearCraftAiImageState() },
                             onPublishCraftProject = { viewModel.publishCraftProject(it) },
@@ -500,7 +517,11 @@ private fun AuthenticatedSchoolShell(
                             feeItems = feeItems,
                             payments = payments,
                             doubts = doubts,
+                            timetables = timetables,
+                            campusPosters = campusPosters,
                             craftProjects = craftProjects,
+                            likedProjectIds = likedProjectIds,
+                            likingProjectIds = likingProjectIds,
                             aiMessages = aiMessages,
                             aiTutorState = aiTutorState,
                             aiPersona = aiPersona,

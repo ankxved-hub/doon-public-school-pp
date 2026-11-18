@@ -7,10 +7,12 @@ import com.example.data.model.*
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.CollectionReference
+import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.WriteBatch
 import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -19,6 +21,8 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
+import java.security.MessageDigest
+import java.util.Locale
 
 class SchoolRepository(private val db: FirebaseFirestore) {
 
@@ -29,6 +33,7 @@ class SchoolRepository(private val db: FirebaseFirestore) {
     )
 
     private val auth = Firebase.auth
+    private val schoolId = SchoolInfo.SCHOOL_ID
 
     private fun requireUserId(): String =
         auth.currentUser?.uid
@@ -37,16 +42,46 @@ class SchoolRepository(private val db: FirebaseFirestore) {
     private fun safeDocId(raw: String): String =
         raw.replace(Regex("[^a-zA-Z0-9_\\-]"), "_").take(128).ifBlank { "doc" }
 
-    private fun col(ownerUid: String, collectionName: String): CollectionReference =
+    private fun schoolDoc(): DocumentReference =
+        db.collection("schools").document(schoolId)
+
+    private fun col(collectionName: String): CollectionReference =
+        schoolDoc().collection(collectionName)
+
+    private fun legacyCol(ownerUid: String, collectionName: String): CollectionReference =
         db.collection("accounts").document(ownerUid).collection(collectionName)
+
+    fun computeLoginTicketId(role: String, userId: String, password: String): String {
+        val normalized = "${role.trim()}|${userId.trim().lowercase(Locale.US)}|${password.trim()}"
+        val digest = MessageDigest.getInstance("SHA-256").digest(normalized.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun loginTicketPayload(
+        uid: String,
+        schoolUserDocId: String,
+        role: String,
+        userId: String,
+        className: String,
+        section: String,
+    ): Map<String, Any> = mapOf(
+        "ownerUid" to uid,
+        "schoolUserDocId" to schoolUserDocId,
+        "role" to role.trim(),
+        "userId" to userId.trim().take(40),
+        "className" to className.trim().take(30),
+        "section" to section.trim().take(10),
+        "createdAt" to FieldValue.serverTimestamp(),
+        "updatedAt" to FieldValue.serverTimestamp(),
+    )
 
     private fun <T> observeCollection(
         collectionName: String,
-        ownerUid: String,
         clazz: Class<T>,
     ): Flow<List<T>> = flow {
+        val uid = requireUserId()
         emitAll(
-            col(ownerUid, collectionName)
+            col(collectionName)
                 .snapshots()
                 .map { snap ->
                     snap.toObjects(clazz, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
@@ -57,109 +92,254 @@ class SchoolRepository(private val db: FirebaseFirestore) {
                         .firstOrNull()
                     if (firestoreError == null && error is CancellationException) throw error
                     val exceptionToLog = firestoreError ?: (error as? Exception)
-                    if (exceptionToLog != null && auth.currentUser?.uid == ownerUid) {
-                        handleFirestoreError(exceptionToLog, OperationType.LIST, "accounts/$ownerUid/$collectionName")
+                    if (exceptionToLog != null && auth.currentUser?.uid == uid) {
+                        handleFirestoreError(exceptionToLog, OperationType.LIST, "schools/$schoolId/$collectionName")
                     }
                     throw error
                 }
         )
     }
 
-    fun observeUsers(ownerUid: String): Flow<List<SchoolUser>> =
-        observeCollection("users", ownerUid, SchoolUser::class.java)
+    fun observeUsers(): Flow<List<SchoolUser>> = observeCollection("users", SchoolUser::class.java)
+    fun observeGatewayConfig(): Flow<List<GatewayConfig>> = observeCollection("gatewayConfig", GatewayConfig::class.java)
+    fun observeCirculars(): Flow<List<Circular>> = observeCollection("circulars", Circular::class.java)
+    fun observeDptDaily(): Flow<List<DptDaily>> = observeCollection("dptDaily", DptDaily::class.java)
+    fun observeDptWeekly(): Flow<List<DptWeekly>> = observeCollection("dptWeekly", DptWeekly::class.java)
+    fun observeAttendance(): Flow<List<AttendanceRecord>> = observeCollection("attendance", AttendanceRecord::class.java)
+    fun observeLeaves(): Flow<List<LeaveRequest>> = observeCollection("leaves", LeaveRequest::class.java)
+    fun observeHomework(): Flow<List<HomeworkItem>> = observeCollection("homework", HomeworkItem::class.java)
+    fun observeTermMarks(): Flow<List<TermMarkCard>> = observeCollection("termMarks", TermMarkCard::class.java)
+    fun observeFeeItems(): Flow<List<FeeItem>> = observeCollection("feeItems", FeeItem::class.java)
+    fun observePayments(): Flow<List<FeePayment>> = observeCollection("payments", FeePayment::class.java)
+    fun observeDoubts(): Flow<List<DoubtMessage>> = observeCollection("doubts", DoubtMessage::class.java)
+    fun observeCraftProjects(): Flow<List<CraftProject>> = observeCollection("craftProjects", CraftProject::class.java)
+    fun observeCraftLikes(): Flow<List<CraftLike>> = observeCollection("craftLikes", CraftLike::class.java)
+    fun observeCampusPosters(): Flow<List<CampusPoster>> = observeCollection("campusPosters", CampusPoster::class.java)
+    fun observeTimetables(): Flow<List<ClassTimetable>> = observeCollection("timetables", ClassTimetable::class.java)
 
-    fun observeGatewayConfig(ownerUid: String): Flow<List<GatewayConfig>> =
-        observeCollection("gatewayConfig", ownerUid, GatewayConfig::class.java)
-
-    fun observeCirculars(ownerUid: String): Flow<List<Circular>> =
-        observeCollection("circulars", ownerUid, Circular::class.java)
-
-    fun observeDptDaily(ownerUid: String): Flow<List<DptDaily>> =
-        observeCollection("dptDaily", ownerUid, DptDaily::class.java)
-
-    fun observeDptWeekly(ownerUid: String): Flow<List<DptWeekly>> =
-        observeCollection("dptWeekly", ownerUid, DptWeekly::class.java)
-
-    fun observeAttendance(ownerUid: String): Flow<List<AttendanceRecord>> =
-        observeCollection("attendance", ownerUid, AttendanceRecord::class.java)
-
-    fun observeLeaves(ownerUid: String): Flow<List<LeaveRequest>> =
-        observeCollection("leaves", ownerUid, LeaveRequest::class.java)
-
-    fun observeHomework(ownerUid: String): Flow<List<HomeworkItem>> =
-        observeCollection("homework", ownerUid, HomeworkItem::class.java)
-
-    fun observeTermMarks(ownerUid: String): Flow<List<TermMarkCard>> =
-        observeCollection("termMarks", ownerUid, TermMarkCard::class.java)
-
-    fun observeFeeItems(ownerUid: String): Flow<List<FeeItem>> =
-        observeCollection("feeItems", ownerUid, FeeItem::class.java)
-
-    fun observePayments(ownerUid: String): Flow<List<FeePayment>> =
-        observeCollection("payments", ownerUid, FeePayment::class.java)
-
-    fun observeDoubts(ownerUid: String): Flow<List<DoubtMessage>> =
-        observeCollection("doubts", ownerUid, DoubtMessage::class.java)
-
-    fun observeCraftProjects(ownerUid: String): Flow<List<CraftProject>> =
-        observeCollection("craftProjects", ownerUid, CraftProject::class.java)
-
-    suspend fun getUsersOnce(ownerUid: String): Result<List<SchoolUser>> = runCatching {
-        col(ownerUid, "users")
-            .get()
-            .await()
-            .toObjects(SchoolUser::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-    }.onFailure { e ->
-        if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.LIST, "accounts/$ownerUid/users")
+    suspend fun isCurrentMemberReady(): Boolean {
+        val uid = auth.currentUser?.uid ?: return false
+        return try {
+            col("members").document(uid).get().await().exists()
+        } catch (_: Exception) {
+            false
+        }
     }
 
-    suspend fun seedDemoDataIfEmpty(ownerUid: String): Result<Unit> = runCatching {
-        val uid = requireUserId()
-        require(uid == ownerUid) { "Owner UID mismatch" }
-        val safeUid = safeDocId(uid)
-        val usersCol = col(uid, "users")
-        val existingSnap = usersCol.get().await()
+    suspend fun clearCurrentMemberSession() {
+        val uid = auth.currentUser?.uid ?: return
+        try {
+            col("members").document(uid).delete().await()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.w("SchoolRepository", "Unable to delete member session doc: ${e.message}")
+        }
+    }
 
-        val adminId = safeDocId("${safeUid}_usr_admin_1")
-        if (!existingSnap.isEmpty) {
-            val hasAdmin = existingSnap.documents.any { it.getString("role") == "ADMIN" }
-            if (!hasAdmin) {
-                usersCol.document(adminId).set(
-                    SchoolUser(
-                        id = "",
-                        ownerUid = uid,
-                        role = "ADMIN",
-                        userId = "ADMIN01",
-                        password = "admin123",
-                        fullName = "Dr. R. K. Tiwari (Principal)",
-                        phone = "+91 76176 14471",
-                        wing = "All Wings",
-                        subject = "Administration",
-                    )
-                ).await()
-            }
+    suspend fun loginWithCredentials(
+        role: String,
+        userId: String,
+        password: String,
+    ): Result<SchoolUser> = runCatching {
+        val uid = requireUserId()
+        ensureSchoolInitialized().getOrThrow()
+
+        val ticketId = computeLoginTicketId(role, userId, password)
+        val ticketSnap = col("loginIndex").document(ticketId).get().await()
+        if (!ticketSnap.exists()) {
+            throw IllegalArgumentException(
+                "Invalid ID or password for ${role.replace('_', ' ')}. Please verify the selected role, ID (e.g. Roll / Admission No), and password."
+            )
+        }
+        val schoolUserDocId = ticketSnap.getString("schoolUserDocId").orEmpty()
+        val matchedRole = ticketSnap.getString("role").orEmpty()
+        require(schoolUserDocId.isNotBlank() && matchedRole == role) {
+            "Credential ticket mismatch. Please try again."
+        }
+
+        val memberRef = col("members").document(uid)
+        val existingMember = memberRef.get().await()
+        if (!existingMember.exists()) {
+            memberRef.set(
+                mapOf(
+                    "ownerUid" to uid,
+                    "schoolUserDocId" to schoolUserDocId,
+                    "role" to matchedRole,
+                    "loginTicketId" to ticketId,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            ).await()
+        } else {
+            memberRef.update(
+                mapOf(
+                    "schoolUserDocId" to schoolUserDocId,
+                    "role" to matchedRole,
+                    "loginTicketId" to ticketId,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            ).await()
+        }
+
+        val userSnap = col("users").document(schoolUserDocId).get().await()
+        userSnap.toObject(SchoolUser::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            ?: throw IllegalStateException("School account profile was not found.")
+    }.onFailure { e ->
+        if (e is CancellationException) throw e
+        if (e is FirebaseFirestoreException) {
+            handleFirestoreError(e, OperationType.GET, "schools/$schoolId/loginIndex")
+        }
+    }
+
+    /**
+     * Ensures /schools/dps_etah exists on the server.
+     * If not initialized yet:
+     * 1. Checks legacy /accounts/{uid}/... and migrates existing school records into /schools/dps_etah.
+     * 2. Otherwise seeds the initial Doon Public School ERP dataset into /schools/dps_etah.
+     */
+    suspend fun ensureSchoolInitialized(): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        val rootSnap = schoolDoc().get().await()
+        if (rootSnap.exists()) {
             return@runCatching
         }
 
+        val legacyUsersSnap = try {
+            legacyCol(uid, "users").get().await()
+        } catch (_: Exception) {
+            null
+        }
+
+        if (legacyUsersSnap != null && !legacyUsersSnap.isEmpty) {
+            migrateLegacyAccountToSharedSchool(uid, legacyUsersSnap.toObjects(SchoolUser::class.java))
+        } else {
+            seedSharedSchoolDataset(uid)
+        }
+    }.onFailure { e ->
+        if (e is CancellationException) throw e
+        handleFirestoreError(e, OperationType.WRITE, "schools/$schoolId/init")
+    }
+
+    private suspend fun migrateLegacyAccountToSharedSchool(
+        uid: String,
+        legacyUsers: List<SchoolUser>,
+    ) {
+        Log.i("SchoolRepository", "Migrating ${legacyUsers.size} legacy users from accounts/$uid to schools/$schoolId")
+        val bootstrapBatch = db.batch()
+        bootstrapBatch.set(
+            schoolDoc(),
+            mapOf(
+                "ownerUid" to uid,
+                "name" to SchoolInfo.NAME,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp(),
+            )
+        )
+
+        var adminCandidate: SchoolUser? = legacyUsers.firstOrNull { it.role == "ADMIN" } ?: legacyUsers.firstOrNull()
+        legacyUsers.forEach { u ->
+            val docId = safeDocId(u.id.ifBlank { "${safeDocId(uid)}_usr_${u.userId}" })
+            val cleanUser = u.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null)
+            bootstrapBatch.set(col("users").document(docId), cleanUser)
+            val ticketId = computeLoginTicketId(cleanUser.role, cleanUser.userId, cleanUser.password)
+            bootstrapBatch.set(
+                col("loginIndex").document(ticketId),
+                loginTicketPayload(uid, docId, cleanUser.role, cleanUser.userId, cleanUser.className, cleanUser.section)
+            )
+            if (u.id == adminCandidate?.id) {
+                adminCandidate = cleanUser.copy(id = docId)
+            }
+        }
+
+        // Temporary admin member during migration so subsequent batches can write all subcollections cleanly
+        val anchor = adminCandidate
+        var createdTempMember = false
+        if (anchor != null) {
+            val anchorTicket = computeLoginTicketId(anchor.role, anchor.userId, anchor.password)
+            bootstrapBatch.set(
+                col("members").document(uid),
+                mapOf(
+                    "ownerUid" to uid,
+                    "schoolUserDocId" to anchor.id,
+                    "role" to anchor.role,
+                    "loginTicketId" to anchorTicket,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            )
+            createdTempMember = true
+        }
+        bootstrapBatch.commit().await()
+
+        // Migrate remaining collections in safe chunked batches
+        val pendingWrites = mutableListOf<Pair<DocumentReference, Any>>()
+
+        suspend fun <T : Any> enqueue(colName: String, clazz: Class<T>, transform: (T) -> T) {
+            val snap = try { legacyCol(uid, colName).get().await() } catch (_: Exception) { null } ?: return
+            snap.documents.forEach { doc ->
+                val obj = doc.toObject(clazz) ?: return@forEach
+                val docId = safeDocId(doc.id)
+                pendingWrites.add(col(colName).document(docId) to transform(obj))
+            }
+        }
+
+        enqueue("gatewayConfig", GatewayConfig::class.java) { it.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null) }
+        enqueue("circulars", Circular::class.java) { it.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null) }
+        enqueue("dptDaily", DptDaily::class.java) { it.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null) }
+        enqueue("dptWeekly", DptWeekly::class.java) { it.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null) }
+        enqueue("attendance", AttendanceRecord::class.java) { it.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null) }
+        enqueue("leaves", LeaveRequest::class.java) { it.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null) }
+        enqueue("homework", HomeworkItem::class.java) { it.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null) }
+        enqueue("termMarks", TermMarkCard::class.java) { it.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null) }
+        enqueue("feeItems", FeeItem::class.java) { it.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null) }
+        enqueue("payments", FeePayment::class.java) { it.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null) }
+        enqueue("doubts", DoubtMessage::class.java) { it.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null) }
+        enqueue("craftProjects", CraftProject::class.java) { it.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null) }
+
+        pendingWrites.chunked(350).forEach { chunk ->
+            val batch = db.batch()
+            chunk.forEach { (ref, obj) -> batch.set(ref, obj) }
+            batch.commit().await()
+        }
+
+        // Remove temporary member only if it didn't intend to bypass role login
+        if (createdTempMember) {
+            try {
+                col("members").document(uid).delete().await()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private suspend fun seedSharedSchoolDataset(uid: String) {
         val today = SchoolCatalog.todayIso()
         val batch = db.batch()
 
+        batch.set(
+            schoolDoc(),
+            mapOf(
+                "ownerUid" to uid,
+                "name" to SchoolInfo.NAME,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp(),
+            )
+        )
+
         fun <T : Any> put(colName: String, rawDocId: String, model: T) {
-            batch.set(col(uid, colName).document(safeDocId(rawDocId)), model)
+            batch.set(col(colName).document(safeDocId(rawDocId)), model)
         }
 
-        val tch1Id = safeDocId("${safeUid}_usr_tch_1")
-        val tch2Id = safeDocId("${safeUid}_usr_tch_2")
-        val tch3Id = safeDocId("${safeUid}_usr_tch_3")
-        val fee1Id = safeDocId("${safeUid}_usr_fee_1")
-        val std1Id = safeDocId("${safeUid}_usr_std_1")
-        val std2Id = safeDocId("${safeUid}_usr_std_2")
-        val std3Id = safeDocId("${safeUid}_usr_std_3")
-        val std4Id = safeDocId("${safeUid}_usr_std_4")
-        val std5Id = safeDocId("${safeUid}_usr_std_5")
+        val adminId = "${schoolId}_usr_admin_1"
+        val tch1Id = "${schoolId}_usr_tch_1"
+        val tch2Id = "${schoolId}_usr_tch_2"
+        val tch3Id = "${schoolId}_usr_tch_3"
+        val fee1Id = "${schoolId}_usr_fee_1"
+        val std1Id = "${schoolId}_usr_std_1"
+        val std2Id = "${schoolId}_usr_std_2"
+        val std3Id = "${schoolId}_usr_std_3"
+        val std4Id = "${schoolId}_usr_std_4"
+        val std5Id = "${schoolId}_usr_std_5"
 
-        // 1. Seed Users (Admin, Teachers, Fee Manager, Students)
         val users = listOf(
             adminId to SchoolUser(
                 ownerUid = uid, role = "ADMIN", userId = "ADMIN01", password = "admin123",
@@ -174,7 +354,7 @@ class SchoolRepository(private val db: FirebaseFirestore) {
             tch2Id to SchoolUser(
                 ownerUid = uid, role = "TEACHER", userId = "TCH102", password = "teach123",
                 fullName = "Mrs. Priya Verma", phone = "9837044556",
-                wing = "Upper School", className = "Class X", section = "A", subject = "Science",
+                wing = "Middle School", className = "Class VII", section = "A", subject = "Science",
             ),
             tch3Id to SchoolUser(
                 ownerUid = uid, role = "TEACHER", userId = "TCH103", password = "teach123",
@@ -201,8 +381,8 @@ class SchoolRepository(private val db: FirebaseFirestore) {
             std3Id to SchoolUser(
                 ownerUid = uid, role = "STUDENT", userId = "DPS2026-003", password = "stud123",
                 fullName = "Vivaan Mishra", phone = "9412510003",
-                wing = "Upper School", className = "Class X", section = "A",
-                parentName = "Mrs. Kavita Mishra", monthlyTuition = 2800L, transportFee = 900L,
+                wing = "Middle School", className = "Class VII", section = "A",
+                parentName = "Mrs. Kavita Mishra", monthlyTuition = 2500L, transportFee = 900L,
             ),
             std4Id to SchoolUser(
                 ownerUid = uid, role = "STUDENT", userId = "DPS2026-004", password = "stud123",
@@ -217,12 +397,18 @@ class SchoolRepository(private val db: FirebaseFirestore) {
                 parentName = "Mr. Vivek Solanki", monthlyTuition = 1700L, transportFee = 700L,
             ),
         )
-        users.forEach { (docId, user) -> put("users", docId, user) }
+        users.forEach { (docId, user) ->
+            put("users", docId, user)
+            val ticketId = computeLoginTicketId(user.role, user.userId, user.password)
+            batch.set(
+                col("loginIndex").document(ticketId),
+                loginTicketPayload(uid, safeDocId(docId), user.role, user.userId, user.className, user.section)
+            )
+        }
 
-        // 2. Gateway config
         put(
             "gatewayConfig",
-            "${safeUid}_gw_main",
+            "${schoolId}_gw_main",
             GatewayConfig(
                 ownerUid = uid,
                 merchantUpi = "doonpublicetah@sbi",
@@ -234,34 +420,37 @@ class SchoolRepository(private val db: FirebaseFirestore) {
             )
         )
 
-        // 3. Circulars
         put(
             "circulars",
-            "${safeUid}_cir_1",
+            "${schoolId}_cir_1",
             Circular(
                 ownerUid = uid,
                 title = "Winter Uniform & Morning Assembly Schedule",
-                category = "Notice", audience = "All Wings", date = today,
+                category = "Notice",
+                audience = "All Wings",
+                date = today,
                 content = "All students from Nursery to Class XII must wear full winter uniform neatly from Monday onwards. Morning assembly begins sharply at 8:00 AM.",
                 postedBy = "Dr. R. K. Tiwari (Principal)",
             )
         )
         put(
             "circulars",
-            "${safeUid}_cir_2",
+            "${schoolId}_cir_2",
             Circular(
                 ownerUid = uid,
                 title = "Pre-Board & Weekly DPT Assessment Guidelines",
-                category = "Exam Datesheet", audience = "Upper School (IX-XII)", date = today,
+                category = "Exam Datesheet",
+                audience = "Upper School",
+                targetWing = "Upper School",
+                date = today,
                 content = "Daily Practice Tests (DPT) carry 20% internal weightage for Classes IX-XII. Parents are requested to review Weekly DPT Report Cards every Saturday.",
                 postedBy = "Dr. R. K. Tiwari (Principal)",
             )
         )
 
-        // 4. Daily DPT Logs
         put(
             "dptDaily",
-            "${safeUid}_dpt_math",
+            "${schoolId}_dpt_math",
             DptDaily(
                 ownerUid = uid, date = today,
                 className = "Class X", section = "A", subject = "Mathematics",
@@ -272,56 +461,31 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         )
         put(
             "dptDaily",
-            "${safeUid}_dpt_sci",
+            "${schoolId}_dpt_sci",
             DptDaily(
                 ownerUid = uid, date = today,
-                className = "Class X", section = "A", subject = "Science",
+                className = "Class VII", section = "A", subject = "Science",
                 held = false, topic = "", maxMarks = 0L, notes = "",
                 reason = "Practical Lab Session", teacherId = "TCH102", teacherName = "Mrs. Priya Verma",
             )
         )
 
-        // 5. Weekly DPT Marks
         val weeklySeeds = listOf(
-            DptWeekly("${safeUid}_w1_m1", uid, "Week 1 (Nov 2026)", "Class X", "A", "Mathematics", std1Id, "Aarav Verma", "DPS2026-001", 15L, 20L, "TCH101"),
-            DptWeekly("${safeUid}_w1_s1", uid, "Week 1 (Nov 2026)", "Class X", "A", "Science", std1Id, "Aarav Verma", "DPS2026-001", 16L, 20L, "TCH102"),
-            DptWeekly("${safeUid}_w1_e1", uid, "Week 1 (Nov 2026)", "Class X", "A", "English", std1Id, "Aarav Verma", "DPS2026-001", 8L, 10L, "TCH101"),
-            DptWeekly("${safeUid}_w2_m1", uid, "Week 2 (Nov 2026)", "Class X", "A", "Mathematics", std1Id, "Aarav Verma", "DPS2026-001", 18L, 20L, "TCH101"),
-            DptWeekly("${safeUid}_w2_s1", uid, "Week 2 (Nov 2026)", "Class X", "A", "Science", std1Id, "Aarav Verma", "DPS2026-001", 17L, 20L, "TCH102"),
-            DptWeekly("${safeUid}_w2_e1", uid, "Week 2 (Nov 2026)", "Class X", "A", "English", std1Id, "Aarav Verma", "DPS2026-001", 9L, 10L, "TCH101"),
-            DptWeekly("${safeUid}_w3_m1", uid, "Week 3 (Nov 2026)", "Class X", "A", "Mathematics", std1Id, "Aarav Verma", "DPS2026-001", 19L, 20L, "TCH101"),
-            DptWeekly("${safeUid}_w3_s1", uid, "Week 3 (Nov 2026)", "Class X", "A", "Science", std1Id, "Aarav Verma", "DPS2026-001", 18L, 20L, "TCH102"),
-            DptWeekly("${safeUid}_w2_m2", uid, "Week 2 (Nov 2026)", "Class X", "A", "Mathematics", std2Id, "Ananya Yadav", "DPS2026-002", 19L, 20L, "TCH101"),
-            DptWeekly("${safeUid}_w2_s2", uid, "Week 2 (Nov 2026)", "Class X", "A", "Science", std2Id, "Ananya Yadav", "DPS2026-002", 19L, 20L, "TCH102"),
-            DptWeekly("${safeUid}_w2_m3", uid, "Week 2 (Nov 2026)", "Class X", "A", "Mathematics", std3Id, "Vivaan Mishra", "DPS2026-003", 11L, 20L, "TCH101"),
-            DptWeekly("${safeUid}_w2_d4_e", uid, "Week 2 (Nov 2026)", "Class V", "A", "English", std4Id, "Diya Chauhan", "DPS2026-004", 18L, 20L, "TCH103"),
-            DptWeekly("${safeUid}_w2_d4_m", uid, "Week 2 (Nov 2026)", "Class V", "A", "Mathematics", std4Id, "Diya Chauhan", "DPS2026-004", 16L, 20L, "TCH103"),
-            DptWeekly("${safeUid}_w2_k5_e", uid, "Week 2 (Nov 2026)", "UKG", "A", "English", std5Id, "Kabir Solanki", "DPS2026-005", 10L, 10L, "TCH103"),
-            DptWeekly("${safeUid}_w2_k5_m", uid, "Week 2 (Nov 2026)", "UKG", "A", "Mathematics", std5Id, "Kabir Solanki", "DPS2026-005", 9L, 10L, "TCH103"),
+            DptWeekly("${schoolId}_w1_m1", uid, "Week 1 (Nov 2026)", "Class X", "A", "Mathematics", std1Id, "Aarav Verma", "DPS2026-001", 15L, 20L, "TCH101"),
+            DptWeekly("${schoolId}_w1_s1", uid, "Week 1 (Nov 2026)", "Class X", "A", "Science", std1Id, "Aarav Verma", "DPS2026-001", 16L, 20L, "TCH101"),
+            DptWeekly("${schoolId}_w2_m1", uid, "Week 2 (Nov 2026)", "Class X", "A", "Mathematics", std1Id, "Aarav Verma", "DPS2026-001", 18L, 20L, "TCH101"),
+            DptWeekly("${schoolId}_w2_s1", uid, "Week 2 (Nov 2026)", "Class X", "A", "Science", std1Id, "Aarav Verma", "DPS2026-001", 17L, 20L, "TCH101"),
+            DptWeekly("${schoolId}_w2_m2", uid, "Week 2 (Nov 2026)", "Class X", "A", "Mathematics", std2Id, "Ananya Yadav", "DPS2026-002", 19L, 20L, "TCH101"),
+            DptWeekly("${schoolId}_w2_m3", uid, "Week 2 (Nov 2026)", "Class VII", "A", "Science", std3Id, "Vivaan Mishra", "DPS2026-003", 16L, 20L, "TCH102"),
         )
         weeklySeeds.forEach { put("dptWeekly", it.id, it.copy(id = "")) }
 
-        // 6. Attendance
-        put("attendance", "${safeUid}_att_1", AttendanceRecord("", uid, today, "Class X", "A", std1Id, "Present", "TCH101"))
-        put("attendance", "${safeUid}_att_2", AttendanceRecord("", uid, today, "Class X", "A", std2Id, "Present", "TCH101"))
-        put("attendance", "${safeUid}_att_3", AttendanceRecord("", uid, today, "Class X", "A", std3Id, "Absent", "TCH101"))
+        put("attendance", "${schoolId}_att_1", AttendanceRecord("", uid, today, "Class X", "A", std1Id, "Present", "TCH101"))
+        put("attendance", "${schoolId}_att_2", AttendanceRecord("", uid, today, "Class X", "A", std2Id, "Present", "TCH101"))
 
-        // 7. Leaves
-        put(
-            "leaves",
-            "${safeUid}_lv_1",
-            LeaveRequest(
-                ownerUid = uid, studentDocId = std1Id,
-                studentName = "Aarav Verma", admissionNo = "DPS2026-001", className = "Class X", section = "A",
-                fromDate = today, toDate = today, reason = "Attending family ceremony in Agra",
-                status = "Approved", teacherRemark = "Approved. Complete DPT notes upon return.",
-            )
-        )
-
-        // 8. Homework
         put(
             "homework",
-            "${safeUid}_hw_1",
+            "${schoolId}_hw_1",
             HomeworkItem(
                 ownerUid = uid, className = "Class X", section = "A",
                 subject = "Mathematics", title = "NCERT Ex 4.3 (Quadratic Equations)",
@@ -330,116 +494,27 @@ class SchoolRepository(private val db: FirebaseFirestore) {
             )
         )
 
-        // 9. Term Marks (Major Exams)
-        put(
-            "termMarks",
-            "${safeUid}_tm_0",
-            TermMarkCard(
-                ownerUid = uid, term = "Unit Test 1 (Oct 2026)",
-                className = "Class X", section = "A", studentDocId = std1Id,
-                studentName = "Aarav Verma", admissionNo = "DPS2026-001",
-                marks = mapOf(
-                    "English" to mapOf("scored" to 80L, "max" to 100L),
-                    "Mathematics" to mapOf("scored" to 84L, "max" to 100L),
-                    "Science" to mapOf("scored" to 82L, "max" to 100L),
-                    "Social Science" to mapOf("scored" to 79L, "max" to 100L),
-                    "Hindi / Computer" to mapOf("scored" to 85L, "max" to 100L),
-                ),
-                remarks = "Strong start to Term 1.",
-                publishedBy = "Mr. Rajesh Sharma",
-            )
-        )
-        put(
-            "termMarks",
-            "${safeUid}_tm_1",
-            TermMarkCard(
-                ownerUid = uid, term = "Half-Yearly Exam 2026",
-                className = "Class X", section = "A", studentDocId = std1Id,
-                studentName = "Aarav Verma", admissionNo = "DPS2026-001",
-                marks = mapOf(
-                    "English" to mapOf("scored" to 86L, "max" to 100L),
-                    "Mathematics" to mapOf("scored" to 92L, "max" to 100L),
-                    "Science" to mapOf("scored" to 88L, "max" to 100L),
-                    "Social Science" to mapOf("scored" to 84L, "max" to 100L),
-                    "Hindi / Computer" to mapOf("scored" to 91L, "max" to 100L),
-                ),
-                remarks = "Consistent performer. Keep aiming for 95%+ in Boards.",
-                publishedBy = "Mr. Rajesh Sharma",
-            )
-        )
-
-        // 10. Fee Items & Sample Verified/Pending Payments
-        val fee0Id = safeDocId("${safeUid}_fee_0")
-        val fee1IdDoc = safeDocId("${safeUid}_fee_1")
-        val fee2Id = safeDocId("${safeUid}_fee_2")
-        val fee3Id = safeDocId("${safeUid}_fee_3")
-        val fee4Id = safeDocId("${safeUid}_fee_4")
-        val fee5Id = safeDocId("${safeUid}_fee_5")
-        val pay0Id = safeDocId("${safeUid}_pay_seed_0")
-        val pay1Id = safeDocId("${safeUid}_pay_seed_1")
-        val pay2Id = safeDocId("${safeUid}_pay_seed_2")
-
-        put("feeItems", fee0Id, FeeItem("", uid, std1Id, "Monthly Tuition Fee (Sep 2026)", "September 2026", 2800L, "PAID", pay0Id))
+        val fee0Id = safeDocId("${schoolId}_fee_0")
+        val fee1IdDoc = safeDocId("${schoolId}_fee_1")
+        val pay0Id = safeDocId("${schoolId}_pay_seed_0")
+        put("feeItems", fee0Id, FeeItem("", uid, std1Id, "Monthly Tuition Fee (Oct 2026)", "October 2026", 2800L, "PAID", pay0Id))
         put("feeItems", fee1IdDoc, FeeItem("", uid, std1Id, "Monthly Tuition Fee (Nov 2026)", "November 2026", 2800L, "UNPAID", ""))
-        put("feeItems", fee2Id, FeeItem("", uid, std1Id, "Transport / Bus Fee (Nov 2026)", "November 2026", 900L, "UNPAID", ""))
-        put("feeItems", fee3Id, FeeItem("", uid, std1Id, "Exam & DPT Fee (Q3)", "Quarter 3", 500L, "UNPAID", ""))
-        put("feeItems", fee4Id, FeeItem("", uid, std1Id, "Monthly Tuition Fee (Oct 2026)", "October 2026", 2800L, "PAID", pay1Id))
-        put("feeItems", fee5Id, FeeItem("", uid, std1Id, "Science Lab & Craft Activity Fee", "November 2026", 450L, "PENDING_VERIFICATION", pay2Id))
-
         put(
             "payments",
             pay0Id,
             FeePayment(
                 ownerUid = uid, studentDocId = std1Id,
                 studentName = "Aarav Verma", admissionNo = "DPS2026-001", className = "Class X-A",
-                feeItemIds = listOf(fee0Id), feeSummary = "Monthly Tuition Fee (Sep 2026)",
-                amount = 2800L, mode = "UPI", utrOrRef = "625410982231", upiApp = "PhonePe",
-                status = "VERIFIED", receiptNo = "DPS-RCP-2026-0088", rejectReason = "",
-                verifiedBy = "Mr. Amit Gupta (Accountant)", verifiedAtStr = "2026-09-07 10:15",
-            )
-        )
-        put(
-            "payments",
-            pay1Id,
-            FeePayment(
-                ownerUid = uid, studentDocId = std1Id,
-                studentName = "Aarav Verma", admissionNo = "DPS2026-001", className = "Class X-A",
-                feeItemIds = listOf(fee4Id), feeSummary = "Monthly Tuition Fee (Oct 2026)",
+                feeItemIds = listOf(fee0Id), feeSummary = "Monthly Tuition Fee (Oct 2026)",
                 amount = 2800L, mode = "UPI", utrOrRef = "628914509812", upiApp = "Google Pay",
                 status = "VERIFIED", receiptNo = "DPS-RCP-2026-0101", rejectReason = "",
                 verifiedBy = "Mr. Amit Gupta (Accountant)", verifiedAtStr = "2026-10-06 11:20",
             )
         )
-        put(
-            "payments",
-            pay2Id,
-            FeePayment(
-                ownerUid = uid, studentDocId = std1Id,
-                studentName = "Aarav Verma", admissionNo = "DPS2026-001", className = "Class X-A",
-                feeItemIds = listOf(fee5Id), feeSummary = "Science Lab & Craft Activity Fee (Nov 2026)",
-                amount = 450L, mode = "UPI", utrOrRef = "632018449107", upiApp = "BHIM UPI",
-                status = "PENDING", receiptNo = "", rejectReason = "",
-                verifiedBy = "", verifiedAtStr = today,
-            )
-        )
 
-        // 11. Doubts
-        put(
-            "doubts",
-            "${safeUid}_dbt_1",
-            DoubtMessage(
-                ownerUid = uid, studentDocId = std1Id,
-                studentName = "Aarav Verma", className = "Class X-A", subject = "Mathematics",
-                message = "Sir, when D = 0 do we write two equal real roots in CBSE Board answers?",
-                reply = "Always write 'two equal real roots' explicitly to earn full step marking.",
-                repliedBy = "Mr. Rajesh Sharma", status = "REPLIED", dateLabel = today,
-            )
-        )
-
-        // 12. Craft Ideas & Project Skills
         put(
             "craftProjects",
-            "${safeUid}_craft_1",
+            "${schoolId}_craft_1",
             CraftProject(
                 ownerUid = uid,
                 title = "Solar-Powered Smart Garden Drip Irrigation",
@@ -454,40 +529,17 @@ class SchoolRepository(private val db: FirebaseFirestore) {
                 dateLabel = today,
                 aiImageData = "",
                 aiPromptUsed = "",
-                likesCount = 4L,
-            )
-        )
-        put(
-            "craftProjects",
-            "${safeUid}_craft_2",
-            CraftProject(
-                ownerUid = uid,
-                title = "Modular Origami & Polyhedron Geometry Dome",
-                category = "Art & Craft",
-                description = "Hands-on mathematics & craft skill workshop teaching students to fold 30 interlocking pastel origami units into a sturdy geodesic icosahedron model.",
-                materials = "A4 pastel craft sheets, origami bone folder, scale, acrylic display stand",
-                authorDocId = tch1Id,
-                authorName = "Mr. Rajesh Sharma",
-                authorUserId = "TCH101",
-                authorRole = "TEACHER",
-                classInfo = "Mathematics Dept",
-                dateLabel = today,
-                aiImageData = "",
-                aiPromptUsed = "",
-                likesCount = 7L,
+                likesCount = 1L,
             )
         )
 
         batch.commit().await()
-        Log.i("SchoolRepository", "Seeded DPS Etah ERP dataset for accounts/$uid")
-    }.onFailure { e ->
-        if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.WRITE, "seed")
+        Log.i("SchoolRepository", "Seeded Doon Public School shared ERP dataset for schools/$schoolId")
     }
 
-    // --- User Account CRUD & Profile Editing (All Roles) ---
+    // --- User Account CRUD & Profile Editing ---
 
-    suspend fun saveUser(user: SchoolUser): Result<String> = runCatching {
+    suspend fun saveUser(user: SchoolUser, editorRole: String = "ADMIN"): Result<String> = runCatching {
         val uid = requireUserId()
         val sanitized = user.copy(
             userId = user.userId.trim().take(40),
@@ -502,35 +554,101 @@ class SchoolRepository(private val db: FirebaseFirestore) {
             monthlyTuition = user.monthlyTuition.coerceAtLeast(0L),
             transportFee = user.transportFee.coerceAtLeast(0L),
         )
-        val usersCol = col(uid, "users")
+        val usersCol = col("users")
         if (sanitized.id.isBlank()) {
             val docRef = usersCol.document()
-            docRef.set(sanitized.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null)).await()
+            val newTicketId = computeLoginTicketId(sanitized.role, sanitized.userId, sanitized.password)
+            val batch = db.batch()
+            batch.set(docRef, sanitized.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null))
+            batch.set(
+                col("loginIndex").document(newTicketId),
+                loginTicketPayload(uid, docRef.id, sanitized.role, sanitized.userId, sanitized.className, sanitized.section)
+            )
+            batch.commit().await()
             docRef.id
         } else {
             val docRef = usersCol.document(sanitized.id)
-            docRef.update(
-                mapOf(
-                    "role" to sanitized.role,
-                    "userId" to sanitized.userId,
-                    "password" to sanitized.password,
-                    "fullName" to sanitized.fullName,
-                    "phone" to sanitized.phone,
-                    "wing" to sanitized.wing,
-                    "className" to sanitized.className,
-                    "section" to sanitized.section,
-                    "subject" to sanitized.subject,
-                    "parentName" to sanitized.parentName,
-                    "monthlyTuition" to sanitized.monthlyTuition,
-                    "transportFee" to sanitized.transportFee,
-                    "updatedAt" to FieldValue.serverTimestamp(),
+            val oldSnap = docRef.get().await()
+            val oldUser = oldSnap.toObject(SchoolUser::class.java)
+            val oldTicketId = oldUser?.let { computeLoginTicketId(it.role, it.userId, it.password) }.orEmpty()
+            val newTicketId = computeLoginTicketId(sanitized.role, sanitized.userId, sanitized.password)
+
+            val memberRef = col("members").document(uid)
+            val memberSnap = memberRef.get().await()
+            val isEditingCurrentLogin = memberSnap.exists() && memberSnap.getString("schoolUserDocId") == sanitized.id
+
+            val batch = db.batch()
+            val updateFields = mutableMapOf<String, Any>(
+                "userId" to sanitized.userId,
+                "password" to sanitized.password,
+                "fullName" to sanitized.fullName,
+                "phone" to sanitized.phone,
+                "wing" to sanitized.wing,
+                "className" to sanitized.className,
+                "section" to sanitized.section,
+                "subject" to sanitized.subject,
+                "parentName" to sanitized.parentName,
+                "monthlyTuition" to sanitized.monthlyTuition,
+                "transportFee" to sanitized.transportFee,
+                "updatedAt" to FieldValue.serverTimestamp(),
+            )
+            if (editorRole == "ADMIN") {
+                updateFields["role"] = sanitized.role
+            }
+            batch.update(docRef, updateFields)
+
+            if (newTicketId == oldTicketId && oldTicketId.isNotBlank()) {
+                batch.update(
+                    col("loginIndex").document(newTicketId),
+                    mapOf(
+                        "ownerUid" to uid,
+                        "schoolUserDocId" to sanitized.id,
+                        "role" to sanitized.role,
+                        "userId" to sanitized.userId,
+                        "className" to sanitized.className,
+                        "section" to sanitized.section,
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
                 )
-            ).await()
+            } else {
+                batch.set(
+                    col("loginIndex").document(newTicketId),
+                    loginTicketPayload(uid, sanitized.id, sanitized.role, sanitized.userId, sanitized.className, sanitized.section)
+                )
+                if (isEditingCurrentLogin) {
+                    batch.update(
+                        memberRef,
+                        mapOf(
+                            "schoolUserDocId" to sanitized.id,
+                            "role" to sanitized.role,
+                            "loginTicketId" to newTicketId,
+                            "updatedAt" to FieldValue.serverTimestamp(),
+                        )
+                    )
+                }
+                if (oldTicketId.isNotBlank()) {
+                    batch.delete(col("loginIndex").document(oldTicketId))
+                }
+            }
+            batch.commit().await()
             docRef.id
         }
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.WRITE, "users")
+        handleFirestoreError(e, OperationType.WRITE, "schools/$schoolId/users")
+    }
+
+    suspend fun deleteUserAccount(user: SchoolUser): Result<Unit> = runCatching {
+        requireUserId()
+        val batch = db.batch()
+        batch.delete(col("users").document(user.id))
+        val ticketId = computeLoginTicketId(user.role, user.userId, user.password)
+        batch.delete(col("loginIndex").document(ticketId))
+        batch.commit().await()
+        Unit
+    }.onFailure { e ->
+        if (e is CancellationException) throw e
+        handleFirestoreError(e, OperationType.DELETE, "schools/$schoolId/users/${user.id}")
     }
 
     suspend fun updateUserProfile(
@@ -541,28 +659,63 @@ class SchoolRepository(private val db: FirebaseFirestore) {
     ): Result<Unit> = runCatching {
         val uid = requireUserId()
         require(userDocId.isNotBlank()) { "User document ID required" }
-        val docRef = col(uid, "users").document(userDocId)
-        docRef.update(
+        val docRef = col("users").document(userDocId)
+        val existingSnap = docRef.get().await()
+        val oldUser = existingSnap.toObject(SchoolUser::class.java)
+            ?: throw IllegalStateException("Profile not found")
+
+        val cleanName = newFullName.trim().take(100)
+        val cleanPhone = newPhone.trim().take(30)
+        val cleanPw = newPassword.trim().take(64)
+
+        val oldTicketId = computeLoginTicketId(oldUser.role, oldUser.userId, oldUser.password)
+        val newTicketId = computeLoginTicketId(oldUser.role, oldUser.userId, cleanPw)
+        val memberRef = col("members").document(uid)
+        val memberSnap = memberRef.get().await()
+        val isOwnMember = memberSnap.exists() && memberSnap.getString("schoolUserDocId") == userDocId
+
+        val batch = db.batch()
+        batch.update(
+            docRef,
             mapOf(
-                "fullName" to newFullName.trim().take(100),
-                "phone" to newPhone.trim().take(30),
-                "password" to newPassword.trim().take(64),
+                "fullName" to cleanName,
+                "phone" to cleanPhone,
+                "password" to cleanPw,
                 "updatedAt" to FieldValue.serverTimestamp(),
             )
-        ).await()
+        )
+        if (oldTicketId != newTicketId) {
+            batch.set(
+                col("loginIndex").document(newTicketId),
+                loginTicketPayload(uid, userDocId, oldUser.role, oldUser.userId, oldUser.className, oldUser.section)
+            )
+            if (isOwnMember) {
+                batch.update(
+                    memberRef,
+                    mapOf(
+                        "loginTicketId" to newTicketId,
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                )
+            }
+            if (oldTicketId.isNotBlank()) {
+                batch.delete(col("loginIndex").document(oldTicketId))
+            }
+        }
+        batch.commit().await()
         Unit
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.UPDATE, "users/$userDocId")
+        handleFirestoreError(e, OperationType.UPDATE, "schools/$schoolId/users/$userDocId")
     }
 
     suspend fun deleteDocument(collectionName: String, docId: String): Result<Unit> = runCatching {
-        val uid = requireUserId()
-        col(uid, collectionName).document(docId).delete().await()
+        requireUserId()
+        col(collectionName).document(docId).delete().await()
         Unit
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.DELETE, "$collectionName/$docId")
+        handleFirestoreError(e, OperationType.DELETE, "schools/$schoolId/$collectionName/$docId")
     }
 
     // --- Gateway Config ---
@@ -575,11 +728,10 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         val cleanAccountNo = config.accountNo.trim().take(40)
         val cleanIfsc = config.ifsc.trim().take(20)
         val cleanRazorpay = config.razorpayKeyId.trim().take(80)
-        val gwCol = col(uid, "gatewayConfig")
-        val existingSnap = gwCol.limit(1).get().await()
-        val existingDoc = existingSnap.documents.firstOrNull()
+        val gwCol = col("gatewayConfig")
+        val existingDoc = gwCol.limit(1).get().await().documents.firstOrNull()
         if (existingDoc == null) {
-            val docId = safeDocId("${uid}_gw_main")
+            val docId = safeDocId("${schoolId}_gw_main")
             gwCol.document(docId).set(
                 config.copy(
                     id = "",
@@ -610,7 +762,7 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         Unit
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.WRITE, "gatewayConfig")
+        handleFirestoreError(e, OperationType.WRITE, "schools/$schoolId/gatewayConfig")
     }
 
     // --- Circulars & Targeted Notices ---
@@ -623,6 +775,9 @@ class SchoolRepository(private val db: FirebaseFirestore) {
             title = circular.title.trim().take(150),
             category = circular.category.trim().ifBlank { "Notice" }.take(40),
             audience = circular.audience.trim().ifBlank { "All Wings" }.take(120),
+            targetWing = circular.targetWing.trim().take(60),
+            targetClass = circular.targetClass.trim().take(30),
+            targetSection = circular.targetSection.trim().take(10),
             date = circular.date.trim().ifBlank { SchoolCatalog.todayIso() }.take(20),
             content = circular.content.trim().take(2000),
             postedBy = circular.postedBy.trim().ifBlank { "Staff" }.take(100),
@@ -635,12 +790,12 @@ class SchoolRepository(private val db: FirebaseFirestore) {
             createdAt = null,
             updatedAt = null,
         )
-        val docRef = col(uid, "circulars").document()
+        val docRef = col("circulars").document()
         docRef.set(sanitized).await()
         docRef.id
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.CREATE, "circulars")
+        handleFirestoreError(e, OperationType.CREATE, "schools/$schoolId/circulars")
     }
 
     // --- Daily & Weekly DPT / Exam ---
@@ -662,10 +817,10 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         val cleanTeacherId = dpt.teacherId.trim().ifBlank { "TCH" }.take(40)
         val cleanTeacherName = dpt.teacherName.trim().ifBlank { "Teacher" }.take(100)
 
-        val safeKey = safeDocId("${uid}_${cleanDate}_${cleanClass}_${cleanSection}_${cleanSubject}_${cleanAssessmentType}")
+        val safeKey = safeDocId("${schoolId}_${cleanDate}_${cleanClass}_${cleanSection}_${cleanSubject}_${cleanAssessmentType}")
         val targetDocId = safeDocId(dpt.id.ifBlank { safeKey })
 
-        val dptCol = col(uid, "dptDaily")
+        val dptCol = col("dptDaily")
         val existingSnap = dptCol.get().await()
         val existingDoc = existingSnap.documents.firstOrNull { doc ->
             doc.id == targetDocId ||
@@ -720,7 +875,7 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         Unit
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.WRITE, "dptDaily")
+        handleFirestoreError(e, OperationType.WRITE, "schools/$schoolId/dptDaily")
     }
 
     suspend fun saveDptWeekly(entry: DptWeekly): Result<Unit> = runCatching {
@@ -736,10 +891,10 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         val cleanScored = entry.scored.coerceAtLeast(0L)
         val cleanTeacherId = entry.teacherId.trim().ifBlank { "TCH" }.take(40)
 
-        val safeKey = safeDocId("${uid}_${cleanWeek}_${cleanClass}_${cleanSection}_${cleanSubject}_${cleanStudentDocId}")
+        val safeKey = safeDocId("${schoolId}_${cleanWeek}_${cleanClass}_${cleanSection}_${cleanSubject}_${cleanStudentDocId}")
         val targetDocId = safeDocId(entry.id.ifBlank { safeKey })
 
-        val weeklyCol = col(uid, "dptWeekly")
+        val weeklyCol = col("dptWeekly")
         val existingSnap = weeklyCol.get().await()
         val existingDoc = existingSnap.documents.firstOrNull { doc ->
             doc.id == targetDocId ||
@@ -782,7 +937,7 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         Unit
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.WRITE, "dptWeekly")
+        handleFirestoreError(e, OperationType.WRITE, "schools/$schoolId/dptWeekly")
     }
 
     // --- Attendance & Leaves ---
@@ -796,10 +951,10 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         val cleanStatus = if (record.status in setOf("Present", "Absent", "Leave")) record.status else "Present"
         val cleanMarkedBy = record.markedBy.trim().ifBlank { "TCH" }.take(40)
 
-        val safeKey = safeDocId("${uid}_att_${cleanDate}_${cleanStudentDocId}")
+        val safeKey = safeDocId("${schoolId}_att_${cleanDate}_${cleanStudentDocId}")
         val targetDocId = safeDocId(record.id.ifBlank { safeKey })
 
-        val attCol = col(uid, "attendance")
+        val attCol = col("attendance")
         val existingSnap = attCol.get().await()
         val existingDoc = existingSnap.documents.firstOrNull { doc ->
             doc.id == targetDocId ||
@@ -834,22 +989,22 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         Unit
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.WRITE, "attendance")
+        handleFirestoreError(e, OperationType.WRITE, "schools/$schoolId/attendance")
     }
 
     suspend fun submitLeave(leave: LeaveRequest): Result<String> = runCatching {
         val uid = requireUserId()
-        val docRef = col(uid, "leaves").document()
+        val docRef = col("leaves").document()
         docRef.set(leave.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null)).await()
         docRef.id
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.CREATE, "leaves")
+        handleFirestoreError(e, OperationType.CREATE, "schools/$schoolId/leaves")
     }
 
     suspend fun updateLeaveStatus(leaveId: String, status: String, remark: String): Result<Unit> = runCatching {
-        val uid = requireUserId()
-        col(uid, "leaves").document(leaveId).update(
+        requireUserId()
+        col("leaves").document(leaveId).update(
             mapOf(
                 "status" to status,
                 "teacherRemark" to remark,
@@ -859,19 +1014,19 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         Unit
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.UPDATE, "leaves/$leaveId")
+        handleFirestoreError(e, OperationType.UPDATE, "schools/$schoolId/leaves/$leaveId")
     }
 
     // --- Homework & Term Marks ---
 
     suspend fun addHomework(hw: HomeworkItem): Result<String> = runCatching {
         val uid = requireUserId()
-        val docRef = col(uid, "homework").document()
+        val docRef = col("homework").document()
         docRef.set(hw.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null)).await()
         docRef.id
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.CREATE, "homework")
+        handleFirestoreError(e, OperationType.CREATE, "schools/$schoolId/homework")
     }
 
     suspend fun saveTermMarkCard(card: TermMarkCard): Result<Unit> = runCatching {
@@ -885,10 +1040,10 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         val cleanRemarks = card.remarks.trim().take(500)
         val cleanPublishedBy = card.publishedBy.trim().ifBlank { "Teacher" }.take(100)
 
-        val safeKey = safeDocId("${uid}_${cleanTerm}_${cleanStudentDocId}")
+        val safeKey = safeDocId("${schoolId}_${cleanTerm}_${cleanStudentDocId}")
         val targetDocId = safeDocId(card.id.ifBlank { safeKey })
 
-        val marksCol = col(uid, "termMarks")
+        val marksCol = col("termMarks")
         val existingSnap = marksCol.get().await()
         val existingDoc = existingSnap.documents.firstOrNull { doc ->
             doc.id == targetDocId ||
@@ -926,29 +1081,98 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         Unit
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.WRITE, "termMarks")
+        handleFirestoreError(e, OperationType.WRITE, "schools/$schoolId/termMarks")
+    }
+
+    // --- Per-Class-Section Editable Timetable ---
+
+    suspend fun saveTimetable(
+        className: String,
+        section: String,
+        slots: List<Map<String, String>>,
+        updatedBy: String,
+    ): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        val cleanClass = className.trim().take(30)
+        val cleanSection = section.trim().take(10)
+        val cleanSlots = slots.take(16)
+        require(cleanClass.isNotBlank() && cleanSection.isNotBlank() && cleanSlots.isNotEmpty()) {
+            "Class, section, and timetable periods are required."
+        }
+        val docId = safeDocId("tt_${cleanClass}_${cleanSection}")
+        val docRef = col("timetables").document(docId)
+        val existing = docRef.get().await()
+        if (!existing.exists()) {
+            docRef.set(
+                ClassTimetable(
+                    id = "",
+                    ownerUid = uid,
+                    className = cleanClass,
+                    section = cleanSection,
+                    slots = cleanSlots,
+                    updatedBy = updatedBy.trim().ifBlank { "Teacher" }.take(100),
+                    createdAt = null,
+                    updatedAt = null,
+                )
+            ).await()
+        } else {
+            docRef.update(
+                mapOf(
+                    "slots" to cleanSlots,
+                    "updatedBy" to updatedBy.trim().ifBlank { "Teacher" }.take(100),
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            ).await()
+        }
+        Unit
+    }.onFailure { e ->
+        if (e is CancellationException) throw e
+        handleFirestoreError(e, OperationType.WRITE, "schools/$schoolId/timetables")
+    }
+
+    // --- Daily Campus Posters / Event Photos ---
+
+    suspend fun addCampusPoster(poster: CampusPoster): Result<String> = runCatching {
+        val uid = requireUserId()
+        val docRef = col("campusPosters").document()
+        val sanitized = poster.copy(
+            id = "",
+            ownerUid = uid,
+            title = poster.title.trim().take(140),
+            subtitle = poster.subtitle.trim().take(180),
+            date = poster.date.trim().ifBlank { SchoolCatalog.todayIso() }.take(30),
+            imageData = poster.imageData.take(455_000),
+            postedBy = poster.postedBy.trim().ifBlank { "Principal" }.take(100),
+            createdAt = null,
+            updatedAt = null,
+        )
+        docRef.set(sanitized).await()
+        docRef.id
+    }.onFailure { e ->
+        if (e is CancellationException) throw e
+        handleFirestoreError(e, OperationType.CREATE, "schools/$schoolId/campusPosters")
     }
 
     // --- Fees & Payments ---
 
     suspend fun addFeeItem(item: FeeItem): Result<String> = runCatching {
         val uid = requireUserId()
-        val docRef = col(uid, "feeItems").document()
+        val docRef = col("feeItems").document()
         docRef.set(item.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null)).await()
         docRef.id
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.CREATE, "feeItems")
+        handleFirestoreError(e, OperationType.CREATE, "schools/$schoolId/feeItems")
     }
 
     suspend fun submitPaymentProof(payment: FeePayment, feeItemIds: List<String>): Result<String> = runCatching {
         val uid = requireUserId()
-        val docRef = col(uid, "payments").document()
+        val docRef = col("payments").document()
         val batch = db.batch()
         batch.set(docRef, payment.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null))
         feeItemIds.forEach { fid ->
             batch.update(
-                col(uid, "feeItems").document(fid),
+                col("feeItems").document(fid),
                 mapOf(
                     "status" to "PENDING_VERIFICATION",
                     "paymentId" to docRef.id,
@@ -960,7 +1184,7 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         docRef.id
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.WRITE, "payments")
+        handleFirestoreError(e, OperationType.WRITE, "schools/$schoolId/payments")
     }
 
     suspend fun verifyPayment(
@@ -969,10 +1193,10 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         verifierName: String,
         verifiedAtStr: String,
     ): Result<Unit> = runCatching {
-        val uid = requireUserId()
+        requireUserId()
         val batch = db.batch()
         batch.update(
-            col(uid, "payments").document(payment.id),
+            col("payments").document(payment.id),
             mapOf(
                 "status" to "VERIFIED",
                 "receiptNo" to receiptNo,
@@ -983,7 +1207,7 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         )
         payment.feeItemIds.forEach { fid ->
             batch.update(
-                col(uid, "feeItems").document(fid),
+                col("feeItems").document(fid),
                 mapOf(
                     "status" to "PAID",
                     "paymentId" to payment.id,
@@ -995,7 +1219,7 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         Unit
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.UPDATE, "payments/${payment.id}")
+        handleFirestoreError(e, OperationType.UPDATE, "schools/$schoolId/payments/${payment.id}")
     }
 
     suspend fun rejectPayment(
@@ -1004,10 +1228,10 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         verifierName: String,
         verifiedAtStr: String,
     ): Result<Unit> = runCatching {
-        val uid = requireUserId()
+        requireUserId()
         val batch = db.batch()
         batch.update(
-            col(uid, "payments").document(payment.id),
+            col("payments").document(payment.id),
             mapOf(
                 "status" to "REJECTED",
                 "rejectReason" to reason,
@@ -1018,7 +1242,7 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         )
         payment.feeItemIds.forEach { fid ->
             batch.update(
-                col(uid, "feeItems").document(fid),
+                col("feeItems").document(fid),
                 mapOf(
                     "status" to "UNPAID",
                     "paymentId" to "",
@@ -1030,24 +1254,24 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         Unit
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.UPDATE, "payments/${payment.id}")
+        handleFirestoreError(e, OperationType.UPDATE, "schools/$schoolId/payments/${payment.id}")
     }
 
     // --- Doubts ---
 
     suspend fun submitDoubt(doubt: DoubtMessage): Result<String> = runCatching {
         val uid = requireUserId()
-        val docRef = col(uid, "doubts").document()
+        val docRef = col("doubts").document()
         docRef.set(doubt.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null)).await()
         docRef.id
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.CREATE, "doubts")
+        handleFirestoreError(e, OperationType.CREATE, "schools/$schoolId/doubts")
     }
 
     suspend fun replyDoubt(doubtId: String, reply: String, repliedBy: String): Result<Unit> = runCatching {
-        val uid = requireUserId()
-        col(uid, "doubts").document(doubtId).update(
+        requireUserId()
+        col("doubts").document(doubtId).update(
             mapOf(
                 "reply" to reply,
                 "repliedBy" to repliedBy,
@@ -1058,10 +1282,10 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         Unit
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.UPDATE, "doubts/$doubtId")
+        handleFirestoreError(e, OperationType.UPDATE, "schools/$schoolId/doubts/$doubtId")
     }
 
-    // --- Craft Ideas & Project Skills ---
+    // --- Craft Ideas & Unique Per-User Likes ---
 
     suspend fun addCraftProject(project: CraftProject): Result<String> = runCatching {
         val uid = requireUserId()
@@ -1089,12 +1313,12 @@ class SchoolRepository(private val db: FirebaseFirestore) {
             createdAt = null,
             updatedAt = null,
         )
-        val docRef = col(uid, "craftProjects").document()
+        val docRef = col("craftProjects").document()
         docRef.set(sanitized).await()
         docRef.id
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.CREATE, "craftProjects")
+        handleFirestoreError(e, OperationType.CREATE, "schools/$schoolId/craftProjects")
     }
 
     suspend fun updateCraftProjectAiImage(
@@ -1102,8 +1326,8 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         aiImageData: String,
         aiPromptUsed: String,
     ): Result<Unit> = runCatching {
-        val uid = requireUserId()
-        col(uid, "craftProjects").document(projectId).update(
+        requireUserId()
+        col("craftProjects").document(projectId).update(
             mapOf(
                 "aiImageData" to aiImageData.take(455_000),
                 "aiPromptUsed" to aiPromptUsed.trim().take(600),
@@ -1113,20 +1337,60 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         Unit
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.UPDATE, "craftProjects/$projectId")
+        handleFirestoreError(e, OperationType.UPDATE, "schools/$schoolId/craftProjects/$projectId")
     }
 
-    suspend fun likeCraftProject(projectId: String, currentLikes: Long): Result<Unit> = runCatching {
+    /**
+     * Atomically toggles a unique like per school user (max 1 like per user per post).
+     * Returns true if liked, false if unliked.
+     */
+    suspend fun toggleCraftProjectLike(projectId: String, likerUserDocId: String): Result<Boolean> = runCatching {
         val uid = requireUserId()
-        col(uid, "craftProjects").document(projectId).update(
-            mapOf(
-                "likesCount" to (currentLikes + 1L),
-                "updatedAt" to FieldValue.serverTimestamp(),
-            )
-        ).await()
-        Unit
+        val safeProjId = safeDocId(projectId)
+        val safeLikerId = safeDocId(likerUserDocId)
+        require(safeProjId.isNotBlank() && safeLikerId.isNotBlank()) { "Valid project and user ID required" }
+
+        val likeDocId = "${safeProjId}__${safeLikerId}"
+        val projRef = col("craftProjects").document(safeProjId)
+        val likeRef = col("craftLikes").document(likeDocId)
+
+        db.runTransaction { tx ->
+            val projSnap = tx.get(projRef)
+            val likeSnap = tx.get(likeRef)
+            val currentLikes = (projSnap.getLong("likesCount") ?: 0L).coerceAtLeast(0L)
+            if (likeSnap.exists()) {
+                tx.delete(likeRef)
+                tx.update(
+                    projRef,
+                    mapOf(
+                        "likesCount" to (currentLikes - 1L).coerceAtLeast(0L),
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                )
+                false
+            } else {
+                tx.set(
+                    likeRef,
+                    mapOf(
+                        "ownerUid" to uid,
+                        "projectId" to safeProjId,
+                        "likerId" to safeLikerId,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                )
+                tx.update(
+                    projRef,
+                    mapOf(
+                        "likesCount" to (currentLikes + 1L),
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                )
+                true
+            }
+        }.await()
     }.onFailure { e ->
         if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.UPDATE, "craftProjects/$projectId")
+        handleFirestoreError(e, OperationType.WRITE, "schools/$schoolId/craftLikes")
     }
 }

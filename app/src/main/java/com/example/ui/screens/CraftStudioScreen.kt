@@ -46,7 +46,7 @@ private enum class CraftFeedFilter(val label: String) {
 }
 
 /**
- * DPS Etah Craft & Project Showcase:
+ * Doon Public School Craft & Project Showcase:
  * Allows Students, Teachers, and Principal to share creative craft ideas,
  * science exhibition models, and project skills with real project photos.
  */
@@ -54,6 +54,8 @@ private enum class CraftFeedFilter(val label: String) {
 fun CraftStudioScreen(
     currentUser: SchoolUser,
     projects: List<CraftProject>,
+    likedProjectIds: Set<String> = emptySet(),
+    likingProjectIds: Set<String> = emptySet(),
     craftAiImageState: CraftAiImageState = CraftAiImageState.Idle,
     generatingPostId: String? = null,
     onGeneratePreviewImage: (title: String, category: String, description: String, materials: String) -> Unit = { _, _, _, _ -> },
@@ -141,7 +143,7 @@ fun CraftStudioScreen(
                                 }
                             }
                             Column {
-                                Text("DPS ETAH CREATIVE LAB", style = MaterialTheme.typography.labelSmall, color = GoldAmber)
+                                Text("DOON PUBLIC SCHOOL CREATIVE LAB", style = MaterialTheme.typography.labelSmall, color = GoldAmber)
                                 Text("Craft & Science Project Showcase", style = MaterialTheme.typography.titleLarge, color = Color.White)
                             }
                         }
@@ -472,11 +474,32 @@ fun CraftStudioScreen(
                                 modifier = Modifier.weight(1f),
                             )
 
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                TextButton(onClick = { onApplaudPost(project) }) {
-                                    Icon(Icons.Filled.ThumbUp, contentDescription = "Applaud", modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("${project.likesCount}")
+                            val isLiked = project.id in likedProjectIds
+                            val isLiking = project.id in likingProjectIds
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                FilledTonalButton(
+                                    onClick = { onApplaudPost(project) },
+                                    enabled = !isLiking,
+                                    colors = ButtonDefaults.filledTonalButtonColors(
+                                        containerColor = if (isLiked) GoldSoft else MaterialTheme.colorScheme.surfaceVariant,
+                                        contentColor = if (isLiked) NavyDeep else MaterialTheme.colorScheme.onSurface,
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier
+                                        .heightIn(min = 48.dp)
+                                        .testTag("craft_like_btn_${project.id}"),
+                                ) {
+                                    Icon(
+                                        Icons.Filled.ThumbUp,
+                                        contentDescription = if (isLiked) "Unlike project (liked)" else "Like project",
+                                        tint = if (isLiked) GoldAmberDark else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = if (isLiked) "Liked • ${project.likesCount}" else "Like • ${project.likesCount}",
+                                        fontWeight = if (isLiked) FontWeight.Bold else FontWeight.Medium,
+                                    )
                                 }
                                 if (canDelete) {
                                     IconButton(onClick = { onDeletePost(project) }) {

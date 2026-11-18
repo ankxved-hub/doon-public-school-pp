@@ -29,6 +29,7 @@ import com.example.R
 import com.example.data.model.SchoolCatalog
 import com.example.data.model.SchoolInfo
 import com.example.ui.theme.*
+import kotlinx.coroutines.launch
 
 @Composable
 fun SchoolRoleLoginScreen(
@@ -38,14 +39,16 @@ fun SchoolRoleLoginScreen(
     isDarkMode: Boolean,
     onToggleDarkMode: (Boolean) -> Unit,
     onRetrySync: () -> Unit = {},
-    onLoginRole: (role: String, userId: String, password: String) -> String?,
+    onLoginRole: suspend (role: String, userId: String, password: String) -> String?,
     onGoogleSignOut: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val scope = rememberCoroutineScope()
     var selectedRole by remember { mutableStateOf("STUDENT") }
     var userId by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
+    var isSubmitting by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(isSyncError) {
@@ -156,7 +159,7 @@ fun SchoolRoleLoginScreen(
                                 color = GoldAmber,
                             )
                             Text(
-                                text = "Connecting to Doon Public School portal...",
+                                text = "Connecting to Doon Public School cloud server...",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -236,7 +239,7 @@ fun SchoolRoleLoginScreen(
                         label = {
                             Text(
                                 when (selectedRole) {
-                                    "STUDENT" -> "Admission / Roll No"
+                                    "STUDENT" -> "Roll / Admission No"
                                     "TEACHER" -> "Employee ID"
                                     "FEE_MANAGER" -> "Staff ID"
                                     else -> "Admin ID"
@@ -246,7 +249,7 @@ fun SchoolRoleLoginScreen(
                         placeholder = {
                             Text(
                                 when (selectedRole) {
-                                    "STUDENT" -> "Enter Admission No (e.g. DPS2026-001)"
+                                    "STUDENT" -> "Enter Roll / Admission No (e.g. 001 or DPS2026-001)"
                                     "TEACHER" -> "Enter Teacher ID (e.g. TCH101)"
                                     "FEE_MANAGER" -> "Enter Accounts ID (e.g. FEE201)"
                                     else -> "Enter Principal Admin ID (e.g. ADMIN01)"
@@ -295,9 +298,15 @@ fun SchoolRoleLoginScreen(
 
                     Button(
                         onClick = {
-                            errorMsg = onLoginRole(selectedRole, userId, password)
+                            if (!isSubmitting) {
+                                scope.launch {
+                                    isSubmitting = true
+                                    errorMsg = onLoginRole(selectedRole, userId, password)
+                                    isSubmitting = false
+                                }
+                            }
                         },
-                        enabled = !isSeeding,
+                        enabled = !isSeeding && !isSubmitting,
                         colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
@@ -305,9 +314,15 @@ fun SchoolRoleLoginScreen(
                             .height(50.dp)
                             .testTag("role_login_submit"),
                     ) {
-                        Icon(Icons.Filled.Login, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Sign In to DPS Etah Portal", fontWeight = FontWeight.Bold)
+                        if (isSubmitting) {
+                            CircularProgressIndicator(color = GoldAmber, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Signing In...", fontWeight = FontWeight.Bold)
+                        } else {
+                            Icon(Icons.Filled.Login, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Sign In to Doon Public School Portal", fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }

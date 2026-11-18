@@ -1,8 +1,50 @@
 {
   "entities": {
+    "School": {
+      "title": "School",
+      "description": "Shared school root document enabling cross-device multi-account access",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "name": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "name", "createdAt", "updatedAt"]
+    },
+    "SchoolMember": {
+      "title": "SchoolMember",
+      "description": "Verified school membership record binding a Firebase Auth UID to a school user role via loginIndex ticket",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "schoolUserDocId": { "type": "string" },
+        "role": { "type": "string", "enum": ["ADMIN", "TEACHER", "FEE_MANAGER", "STUDENT"] },
+        "loginTicketId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "schoolUserDocId", "role", "loginTicketId", "createdAt", "updatedAt"]
+    },
+    "LoginTicket": {
+      "title": "LoginTicket",
+      "description": "SHA-256 keyed credential verification lookup document containing no plaintext passwords or PII",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "schoolUserDocId": { "type": "string" },
+        "role": { "type": "string", "enum": ["ADMIN", "TEACHER", "FEE_MANAGER", "STUDENT"] },
+        "userId": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "schoolUserDocId", "role", "userId", "className", "section", "createdAt", "updatedAt"]
+    },
     "SchoolUser": {
       "title": "SchoolUser",
-      "description": "User account for Principal/Admin, Teacher, Fee Manager, or Student/Parent in DPS Etah ERP",
+      "description": "User account for Principal/Admin, Teacher, Fee Manager, or Student/Parent in Doon Public School ERP",
       "type": "object",
       "properties": {
         "ownerUid": { "type": "string" },
@@ -42,13 +84,16 @@
     },
     "Circular": {
       "title": "Circular",
-      "description": "School circulars, teacher notices (broadcast or targeted to a specific person), holidays, and exam datesheets with optional photo/document attachments",
+      "description": "School circulars, teacher notices (school-wide, class-section targeted, or personal), holidays, and exam datesheets with optional photo/document attachments",
       "type": "object",
       "properties": {
         "ownerUid": { "type": "string" },
         "title": { "type": "string" },
         "category": { "type": "string" },
         "audience": { "type": "string" },
+        "targetWing": { "type": "string" },
+        "targetClass": { "type": "string" },
+        "targetSection": { "type": "string" },
         "date": { "type": "string" },
         "content": { "type": "string" },
         "postedBy": { "type": "string" },
@@ -251,7 +296,7 @@
     },
     "CraftProject": {
       "title": "CraftProject",
-      "description": "Student and teacher craft ideas & project skills with school AI-generated concept imagery",
+      "description": "Student and teacher craft ideas & project skills with real uploaded photos and unique likes",
       "type": "object",
       "properties": {
         "ownerUid": { "type": "string" },
@@ -272,21 +317,71 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["ownerUid", "title", "category", "description", "materials", "authorDocId", "authorName", "authorUserId", "authorRole", "classInfo", "dateLabel", "aiImageData", "aiPromptUsed", "likesCount", "createdAt", "updatedAt"]
+    },
+    "CraftLike": {
+      "title": "CraftLike",
+      "description": "Unique per-user like record preventing duplicate likes on CraftProject posts",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "projectId": { "type": "string" },
+        "likerId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "projectId", "likerId", "createdAt", "updatedAt"]
+    },
+    "CampusPoster": {
+      "title": "CampusPoster",
+      "description": "Daily campus celebration or event photo published by Principal/Admin",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "date": { "type": "string" },
+        "imageData": { "type": "string" },
+        "postedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "title", "subtitle", "date", "imageData", "postedBy", "createdAt", "updatedAt"]
+    },
+    "ClassTimetable": {
+      "title": "ClassTimetable",
+      "description": "Editable period-wise weekly timetable unique to each class and section",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "slots": { "type": "array" },
+        "updatedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "className", "section", "slots", "updatedBy", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
-    "/accounts/{ownerUid}/users/{docId}": { "schema": { "$ref": "#/entities/SchoolUser" }, "description": "All school user accounts for an authenticated school portal" },
-    "/accounts/{ownerUid}/gatewayConfig/{docId}": { "schema": { "$ref": "#/entities/GatewayConfig" }, "description": "Payment gateway settings" },
-    "/accounts/{ownerUid}/circulars/{docId}": { "schema": { "$ref": "#/entities/Circular" }, "description": "Principal circulars and targeted teacher notices" },
-    "/accounts/{ownerUid}/dptDaily/{docId}": { "schema": { "$ref": "#/entities/DptDaily" }, "description": "Daily DPT and Exam logs" },
-    "/accounts/{ownerUid}/dptWeekly/{docId}": { "schema": { "$ref": "#/entities/DptWeekly" }, "description": "Weekly DPT scores" },
-    "/accounts/{ownerUid}/attendance/{docId}": { "schema": { "$ref": "#/entities/AttendanceRecord" }, "description": "Student attendance" },
-    "/accounts/{ownerUid}/leaves/{docId}": { "schema": { "$ref": "#/entities/LeaveRequest" }, "description": "Student leave requests" },
-    "/accounts/{ownerUid}/homework/{docId}": { "schema": { "$ref": "#/entities/HomeworkItem" }, "description": "Daily homework diary" },
-    "/accounts/{ownerUid}/termMarks/{docId}": { "schema": { "$ref": "#/entities/TermMarkCard" }, "description": "Term exam marks" },
-    "/accounts/{ownerUid}/feeItems/{docId}": { "schema": { "$ref": "#/entities/FeeItem" }, "description": "Student fee line items" },
-    "/accounts/{ownerUid}/payments/{docId}": { "schema": { "$ref": "#/entities/FeePayment" }, "description": "Fee payment proofs and receipts" },
-    "/accounts/{ownerUid}/doubts/{docId}": { "schema": { "$ref": "#/entities/DoubtMessage" }, "description": "Parent-Teacher doubt box" },
-    "/accounts/{ownerUid}/craftProjects/{docId}": { "schema": { "$ref": "#/entities/CraftProject" }, "description": "Student & teacher craft ideas and project skills with AI-generated visuals" }
+    "/schools/{schoolId}": { "schema": { "$ref": "#/entities/School" }, "description": "Root school metadata for cross-device sync" },
+    "/schools/{schoolId}/members/{authUid}": { "schema": { "$ref": "#/entities/SchoolMember" }, "description": "Authenticated user role bindings verified against loginIndex" },
+    "/schools/{schoolId}/loginIndex/{ticketId}": { "schema": { "$ref": "#/entities/LoginTicket" }, "description": "SHA-256 keyed credential verification index" },
+    "/schools/{schoolId}/users/{docId}": { "schema": { "$ref": "#/entities/SchoolUser" }, "description": "All school user accounts across devices" },
+    "/schools/{schoolId}/gatewayConfig/{docId}": { "schema": { "$ref": "#/entities/GatewayConfig" }, "description": "Payment gateway settings" },
+    "/schools/{schoolId}/circulars/{docId}": { "schema": { "$ref": "#/entities/Circular" }, "description": "Principal circulars and class/student targeted teacher notices" },
+    "/schools/{schoolId}/dptDaily/{docId}": { "schema": { "$ref": "#/entities/DptDaily" }, "description": "Daily DPT and Exam logs" },
+    "/schools/{schoolId}/dptWeekly/{docId}": { "schema": { "$ref": "#/entities/DptWeekly" }, "description": "Weekly DPT scores" },
+    "/schools/{schoolId}/attendance/{docId}": { "schema": { "$ref": "#/entities/AttendanceRecord" }, "description": "Student attendance" },
+    "/schools/{schoolId}/leaves/{docId}": { "schema": { "$ref": "#/entities/LeaveRequest" }, "description": "Student leave requests" },
+    "/schools/{schoolId}/homework/{docId}": { "schema": { "$ref": "#/entities/HomeworkItem" }, "description": "Daily homework diary" },
+    "/schools/{schoolId}/termMarks/{docId}": { "schema": { "$ref": "#/entities/TermMarkCard" }, "description": "Term exam marks" },
+    "/schools/{schoolId}/feeItems/{docId}": { "schema": { "$ref": "#/entities/FeeItem" }, "description": "Student fee line items" },
+    "/schools/{schoolId}/payments/{docId}": { "schema": { "$ref": "#/entities/FeePayment" }, "description": "Fee payment proofs and receipts" },
+    "/schools/{schoolId}/doubts/{docId}": { "schema": { "$ref": "#/entities/DoubtMessage" }, "description": "Parent-Teacher doubt box" },
+    "/schools/{schoolId}/craftProjects/{docId}": { "schema": { "$ref": "#/entities/CraftProject" }, "description": "Student & teacher craft ideas and project showcase" },
+    "/schools/{schoolId}/craftLikes/{likeDocId}": { "schema": { "$ref": "#/entities/CraftLike" }, "description": "Unique per-user like tracker for craft projects" },
+    "/schools/{schoolId}/campusPosters/{docId}": { "schema": { "$ref": "#/entities/CampusPoster" }, "description": "Daily campus celebration & event posters published by Admin" },
+    "/schools/{schoolId}/timetables/{docId}": { "schema": { "$ref": "#/entities/ClassTimetable" }, "description": "Class-section specific editable weekly timetables" }
   }
 }

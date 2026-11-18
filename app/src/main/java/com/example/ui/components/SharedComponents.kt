@@ -27,7 +27,10 @@ import com.example.R
 import com.example.data.model.*
 import com.example.ui.theme.*
 import java.text.NumberFormat
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 fun formatInr(amount: Long): String {
     val nf = NumberFormat.getNumberInstance(Locale("en", "IN"))
@@ -421,7 +424,7 @@ fun OfficialFeeReceiptDialog(
                 ReceiptRow("Receipt No", payment.receiptNo)
                 ReceiptRow("Student", payment.studentName)
                 ReceiptRow("Admission No", payment.admissionNo)
-                ReceiptRow("Class / Wing", "${payment.className} (${student?.wing ?: "DPS Etah"})")
+                ReceiptRow("Class / Wing", "${payment.className} (${student?.wing ?: "Doon Public School"})")
                 ReceiptRow("Particulars", payment.feeSummary)
                 ReceiptRow("Amount Paid", formatInr(payment.amount))
                 ReceiptRow("Mode", "${payment.mode} (${payment.upiApp})")
@@ -445,7 +448,7 @@ fun OfficialFeeReceiptDialog(
                         <table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:13px;">
                           <tr><td style="padding:6px;border:1px solid #cbd5e1;"><b>Student Name</b></td><td style="padding:6px;border:1px solid #cbd5e1;">${payment.studentName}</td></tr>
                           <tr><td style="padding:6px;border:1px solid #cbd5e1;"><b>Admission No</b></td><td style="padding:6px;border:1px solid #cbd5e1;">${payment.admissionNo}</td></tr>
-                          <tr><td style="padding:6px;border:1px solid #cbd5e1;"><b>Class & Wing</b></td><td style="padding:6px;border:1px solid #cbd5e1;">${payment.className} (${student?.wing ?: "DPS Etah"})</td></tr>
+                          <tr><td style="padding:6px;border:1px solid #cbd5e1;"><b>Class & Wing</b></td><td style="padding:6px;border:1px solid #cbd5e1;">${payment.className} (${student?.wing ?: "Doon Public School"})</td></tr>
                           <tr><td style="padding:6px;border:1px solid #cbd5e1;"><b>Particulars</b></td><td style="padding:6px;border:1px solid #cbd5e1;">${payment.feeSummary}</td></tr>
                           <tr><td style="padding:6px;border:1px solid #cbd5e1;"><b>Payment Mode & UTR</b></td><td style="padding:6px;border:1px solid #cbd5e1;">${payment.mode} (${payment.upiApp}) • ${payment.utrOrRef}</td></tr>
                           <tr><td style="padding:6px;border:1px solid #cbd5e1;"><b>Total Amount Paid</b></td><td style="padding:6px;border:1px solid #cbd5e1;color:#059669;"><b>${formatInr(payment.amount)} (VERIFIED)</b></td></tr>
@@ -585,4 +588,79 @@ fun StudentIdCardDialog(
             TextButton(onClick = onDismiss) { Text("Close") }
         },
     )
+}
+
+fun utcMillisToIsoDate(millis: Long): String {
+    val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    sdf.timeZone = TimeZone.getTimeZone("UTC")
+    return sdf.format(Date(millis))
+}
+
+fun isoDateToUtcMillis(isoDate: String): Long? {
+    return try {
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        sdf.timeZone = TimeZone.getTimeZone("UTC")
+        sdf.parse(isoDate.trim())?.time
+    } catch (_: Exception) {
+        null
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SchoolDatePickerField(
+    label: String,
+    selectedDate: String,
+    onDateSelected: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    testTagName: String = "date_picker_field",
+) {
+    var showPicker by remember { mutableStateOf(false) }
+
+    OutlinedButton(
+        onClick = { showPicker = true },
+        shape = RoundedCornerShape(12.dp),
+        modifier = modifier
+            .heightIn(min = 52.dp)
+            .testTag(testTagName),
+    ) {
+        Icon(Icons.Filled.CalendarMonth, contentDescription = label, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = selectedDate.ifBlank { SchoolCatalog.todayIso() },
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        Icon(Icons.Filled.EditCalendar, contentDescription = null, modifier = Modifier.size(16.dp))
+    }
+
+    if (showPicker) {
+        val initialMillis = remember(selectedDate) {
+            isoDateToUtcMillis(selectedDate) ?: System.currentTimeMillis()
+        }
+        val datePickerState = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
+        DatePickerDialog(
+            onDismissRequest = { showPicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val millis = datePickerState.selectedDateMillis
+                        if (millis != null) {
+                            onDateSelected(utcMillisToIsoDate(millis))
+                        }
+                        showPicker = false
+                    }
+                ) { Text("Select Date") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPicker = false }) { Text("Cancel") }
+            },
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
 }

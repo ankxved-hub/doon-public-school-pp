@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.*
+import com.example.data.model.SchoolCatalog.toSlotMap
 import com.example.data.preferences.SavedRoleSession
 import com.example.data.preferences.ThemePreferences
 import com.example.data.repository.SchoolRepository
@@ -75,6 +76,8 @@ class SchoolViewModel(
 ) : ViewModel() {
 
     private val _syncGeneration = MutableStateFlow(0)
+    private val _isMemberReady = MutableStateFlow(false)
+    val isMemberReady: StateFlow<Boolean> = _isMemberReady.asStateFlow()
     private var autoRetryCount = 0
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -82,19 +85,23 @@ class SchoolViewModel(
         label: String,
         flowProvider: () -> Flow<List<T>>,
     ): StateFlow<DataUiState<List<T>>> =
-        _syncGeneration
-            .flatMapLatest {
-                flowProvider()
-                    .map<List<T>, DataUiState<List<T>>> { DataUiState.Success(it) }
-                    .catch { error ->
-                        val firestoreError = generateSequence(error) { it.cause }
-                            .filterIsInstance<FirebaseFirestoreException>()
-                            .firstOrNull()
-                        if (firestoreError == null && error is CancellationException) throw error
-                        val rootError = firestoreError ?: error
-                        Log.w(TAG, "Error observing $label", rootError)
-                        emit(DataUiState.Error(rootError.message ?: "Unable to connect to $label"))
-                    }
+        combine(_isMemberReady, _syncGeneration) { ready, gen -> ready to gen }
+            .flatMapLatest { (ready, _) ->
+                if (!ready) {
+                    flowOf<DataUiState<List<T>>>(DataUiState.Success(emptyList()))
+                } else {
+                    flowProvider()
+                        .map<List<T>, DataUiState<List<T>>> { DataUiState.Success(it) }
+                        .catch { error ->
+                            val firestoreError = generateSequence(error) { it.cause }
+                                .filterIsInstance<FirebaseFirestoreException>()
+                                .firstOrNull()
+                            if (firestoreError == null && error is CancellationException) throw error
+                            val rootError = firestoreError ?: error
+                            Log.w(TAG, "Error observing $label", rootError)
+                            emit(DataUiState.Error(rootError.message ?: "Unable to connect to $label"))
+                        }
+                }
             }
             .stateIn(
                 scope = viewModelScope,
@@ -102,25 +109,31 @@ class SchoolViewModel(
                 initialValue = DataUiState.Loading,
             )
 
-    val usersState: StateFlow<DataUiState<List<SchoolUser>>> = observeStateFlow("users") { repository.observeUsers(ownerUid) }
-    val gatewayState: StateFlow<DataUiState<List<GatewayConfig>>> = observeStateFlow("gatewayConfig") { repository.observeGatewayConfig(ownerUid) }
-    val circularsState: StateFlow<DataUiState<List<Circular>>> = observeStateFlow("circulars") { repository.observeCirculars(ownerUid) }
-    val dptDailyState: StateFlow<DataUiState<List<DptDaily>>> = observeStateFlow("dptDaily") { repository.observeDptDaily(ownerUid) }
-    val dptWeeklyState: StateFlow<DataUiState<List<DptWeekly>>> = observeStateFlow("dptWeekly") { repository.observeDptWeekly(ownerUid) }
-    val attendanceState: StateFlow<DataUiState<List<AttendanceRecord>>> = observeStateFlow("attendance") { repository.observeAttendance(ownerUid) }
-    val leavesState: StateFlow<DataUiState<List<LeaveRequest>>> = observeStateFlow("leaves") { repository.observeLeaves(ownerUid) }
-    val homeworkState: StateFlow<DataUiState<List<HomeworkItem>>> = observeStateFlow("homework") { repository.observeHomework(ownerUid) }
-    val termMarksState: StateFlow<DataUiState<List<TermMarkCard>>> = observeStateFlow("termMarks") { repository.observeTermMarks(ownerUid) }
-    val feeItemsState: StateFlow<DataUiState<List<FeeItem>>> = observeStateFlow("feeItems") { repository.observeFeeItems(ownerUid) }
-    val paymentsState: StateFlow<DataUiState<List<FeePayment>>> = observeStateFlow("payments") { repository.observePayments(ownerUid) }
-    val doubtsState: StateFlow<DataUiState<List<DoubtMessage>>> = observeStateFlow("doubts") { repository.observeDoubts(ownerUid) }
-    val craftProjectsState: StateFlow<DataUiState<List<CraftProject>>> = observeStateFlow("craftProjects") { repository.observeCraftProjects(ownerUid) }
+    val usersState: StateFlow<DataUiState<List<SchoolUser>>> = observeStateFlow("users") { repository.observeUsers() }
+    val gatewayState: StateFlow<DataUiState<List<GatewayConfig>>> = observeStateFlow("gatewayConfig") { repository.observeGatewayConfig() }
+    val circularsState: StateFlow<DataUiState<List<Circular>>> = observeStateFlow("circulars") { repository.observeCirculars() }
+    val dptDailyState: StateFlow<DataUiState<List<DptDaily>>> = observeStateFlow("dptDaily") { repository.observeDptDaily() }
+    val dptWeeklyState: StateFlow<DataUiState<List<DptWeekly>>> = observeStateFlow("dptWeekly") { repository.observeDptWeekly() }
+    val attendanceState: StateFlow<DataUiState<List<AttendanceRecord>>> = observeStateFlow("attendance") { repository.observeAttendance() }
+    val leavesState: StateFlow<DataUiState<List<LeaveRequest>>> = observeStateFlow("leaves") { repository.observeLeaves() }
+    val homeworkState: StateFlow<DataUiState<List<HomeworkItem>>> = observeStateFlow("homework") { repository.observeHomework() }
+    val termMarksState: StateFlow<DataUiState<List<TermMarkCard>>> = observeStateFlow("termMarks") { repository.observeTermMarks() }
+    val feeItemsState: StateFlow<DataUiState<List<FeeItem>>> = observeStateFlow("feeItems") { repository.observeFeeItems() }
+    val paymentsState: StateFlow<DataUiState<List<FeePayment>>> = observeStateFlow("payments") { repository.observePayments() }
+    val doubtsState: StateFlow<DataUiState<List<DoubtMessage>>> = observeStateFlow("doubts") { repository.observeDoubts() }
+    val craftProjectsState: StateFlow<DataUiState<List<CraftProject>>> = observeStateFlow("craftProjects") { repository.observeCraftProjects() }
+    val craftLikesState: StateFlow<DataUiState<List<CraftLike>>> = observeStateFlow("craftLikes") { repository.observeCraftLikes() }
+    val campusPostersState: StateFlow<DataUiState<List<CampusPoster>>> = observeStateFlow("campusPosters") { repository.observeCampusPosters() }
+    val timetablesState: StateFlow<DataUiState<List<ClassTimetable>>> = observeStateFlow("timetables") { repository.observeTimetables() }
 
     private val _toastMessage = MutableStateFlow<String?>(null)
     val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
 
     private val _isSeeding = MutableStateFlow(true)
     val isSeeding: StateFlow<Boolean> = _isSeeding.asStateFlow()
+
+    private val _likingProjectIds = MutableStateFlow<Set<String>>(emptySet())
+    val likingProjectIds: StateFlow<Set<String>> = _likingProjectIds.asStateFlow()
 
     private sealed interface SessionRestoreState {
         data object Checking : SessionRestoreState
@@ -132,18 +145,10 @@ class SchoolViewModel(
             .map<SavedRoleSession?, SessionRestoreState> { SessionRestoreState.Ready(it) }
             .stateIn(viewModelScope, SharingStarted.Eagerly, SessionRestoreState.Checking)
 
-    val isRestoringSavedSession: StateFlow<Boolean> =
-        combine(sessionRestoreState, usersState, _isSeeding) { restoreState, usersUi, seeding ->
-            when (restoreState) {
-                is SessionRestoreState.Checking -> true
-                is SessionRestoreState.Ready ->
-                    restoreState.session != null && (usersUi is DataUiState.Loading || seeding)
-            }
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, true)
-
     private val _activeSchoolUserDocId = MutableStateFlow<String?>(null)
     val activeSchoolUser: StateFlow<SchoolUser?> =
-        combine(_activeSchoolUserDocId, sessionRestoreState, usersState) { manualDocId, restoreState, usersUi ->
+        combine(_activeSchoolUserDocId, sessionRestoreState, usersState, _isMemberReady) { manualDocId, restoreState, usersUi, memberReady ->
+            if (!memberReady) return@combine null
             val list = (usersUi as? DataUiState.Success)?.data ?: return@combine null
             if (manualDocId != null) {
                 list.firstOrNull { it.id == manualDocId }
@@ -159,7 +164,24 @@ class SchoolViewModel(
             }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), null)
 
-    // Gemini Multi-Turn AI Study Tutor & Mentor State
+    val isRestoringSavedSession: StateFlow<Boolean> =
+        combine(sessionRestoreState, usersState, _isSeeding, _isMemberReady) { restoreState, usersUi, seeding, memberReady ->
+            when (restoreState) {
+                is SessionRestoreState.Checking -> true
+                is SessionRestoreState.Ready ->
+                    restoreState.session != null && (seeding || (memberReady && usersUi is DataUiState.Loading))
+            }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    val likedProjectIds: StateFlow<Set<String>> =
+        combine(craftLikesState, activeSchoolUser) { likesUi, user ->
+            val currentDocId = user?.id.orEmpty()
+            if (currentDocId.isBlank()) return@combine emptySet()
+            val likes = (likesUi as? DataUiState.Success)?.data ?: return@combine emptySet()
+            likes.filter { it.likerId == currentDocId }.map { it.projectId }.toSet()
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), emptySet())
+
+    // Gemini Multi-Turn AI Study Tutor & Mentor State (retained for signature compatibility)
     private val _aiPersona = MutableStateFlow(AiTutorPersona.STUDY_TUTOR)
     val aiPersona: StateFlow<AiTutorPersona> = _aiPersona.asStateFlow()
 
@@ -171,13 +193,6 @@ class SchoolViewModel(
                 ${persona.systemRole}
                 School Profile: ${SchoolInfo.NAME} (${SchoolInfo.AFFILIATION}).
                 Trust: ${SchoolInfo.TRUST}. Motto: "${SchoolInfo.MOTTO}".
-                Address: ${SchoolInfo.ADDRESS}. Phones: ${SchoolInfo.PHONES}. Email: ${SchoolInfo.EMAIL}.
-                4 Academic Wings:
-                1. Doon Kidz (Pre-Primary: Nursery, LKG, UKG)
-                2. Lower School (Primary: Classes I to V)
-                3. Middle School (Upper Primary: Classes VI to VIII)
-                4. Upper School (Senior Secondary: Classes IX to XII)
-                Always respond accurately, concisely, and encourage student curiosity.
                 """.trimIndent()
             )
         }
@@ -196,7 +211,7 @@ class SchoolViewModel(
         listOf(
             AiChatMessage(
                 isUser = false,
-                text = "Namaste! I am your DPS Etah Gemini Assistant. Pick a role above (CBSE Study Tutor, Craft Mentor, or DPT Coach) and let's chat!"
+                text = "Namaste! Welcome to Doon Public School, Etah."
             )
         )
     )
@@ -218,26 +233,35 @@ class SchoolViewModel(
                 Firebase.auth.currentUser?.getIdToken(true)?.await()
             } catch (_: Exception) {
             }
-            var seedResult = repository.seedDemoDataIfEmpty(ownerUid)
-            if (seedResult.isFailure) {
+            var initResult = repository.ensureSchoolInitialized()
+            if (initResult.isFailure) {
                 delay(1200L)
                 try {
                     Firebase.auth.currentUser?.getIdToken(true)?.await()
                 } catch (_: Exception) {
                 }
-                _syncGeneration.value += 1
-                seedResult = repository.seedDemoDataIfEmpty(ownerUid)
+                initResult = repository.ensureSchoolInitialized()
             }
-            seedResult.onFailure { e ->
-                Log.w(TAG, "Initial seed retry failed", e)
+            initResult.onFailure { e ->
+                Log.w(TAG, "Initial school initialization failed", e)
+            }
+
+            val memberReady = repository.isCurrentMemberReady()
+            if (memberReady) {
+                _isMemberReady.value = true
+                _syncGeneration.value += 1
+            } else {
+                _isMemberReady.value = false
+                // Clear any stale saved session from an earlier local install if Firestore member doc isn't present
+                sessionPrefs.clearRoleSession()
             }
             _isSeeding.value = false
         }
 
-        // Automatically recover if any transient auth/network error occurs right after sign-in
+        // Automatically recover if any transient auth/network error occurs while active member
         viewModelScope.launch {
             usersState.collect { state ->
-                if (state is DataUiState.Error && autoRetryCount < 2) {
+                if (_isMemberReady.value && state is DataUiState.Error && autoRetryCount < 2) {
                     autoRetryCount += 1
                     delay(1200L * autoRetryCount)
                     retryCloudSync(userInitiated = false)
@@ -255,13 +279,15 @@ class SchoolViewModel(
                 Firebase.auth.currentUser?.getIdToken(true)?.await()
             } catch (_: Exception) {
             }
-            val result = repository.seedDemoDataIfEmpty(ownerUid)
+            val result = repository.ensureSchoolInitialized()
+            val memberReady = repository.isCurrentMemberReady()
+            _isMemberReady.value = memberReady
             _syncGeneration.value += 1
             _isSeeding.value = false
             if (userInitiated) {
                 result
-                    .onSuccess { _toastMessage.value = "Connected to Doon Public School portal." }
-                    .onFailure { _toastMessage.value = "Please check your internet connection and tap Retry." }
+                    .onSuccess { _toastMessage.value = "Connected to Doon Public School cloud server." }
+                    .onFailure { _toastMessage.value = "Please check your internet connection and tap Reconnect." }
             }
         }
     }
@@ -274,75 +300,39 @@ class SchoolViewModel(
         _toastMessage.value = msg
     }
 
-    fun loginSchoolRole(role: String, userId: String, password: String): String? {
+    suspend fun loginSchoolRole(role: String, userId: String, password: String): String? {
         val cleanId = userId.trim()
         val cleanPw = password.trim()
         if (cleanId.isEmpty() || cleanPw.isEmpty()) {
             return "Please enter both your ID (e.g. Roll / Admission No) and Password."
         }
-
-        when (val state = usersState.value) {
-            is DataUiState.Loading -> {
-                return "Connecting to school portal. Please wait 2 seconds and tap Sign In again."
+        val result = repository.loginWithCredentials(role, cleanId, cleanPw)
+        return result.fold(
+            onSuccess = { matchedUser ->
+                _activeSchoolUserDocId.value = matchedUser.id
+                sessionPrefs.saveRoleSession(
+                    ownerUid = ownerUid,
+                    docId = matchedUser.id,
+                    userId = matchedUser.userId.trim(),
+                    role = matchedUser.role,
+                )
+                _isMemberReady.value = true
+                _syncGeneration.value += 1
+                null
+            },
+            onFailure = { error ->
+                error.localizedMessage
+                    ?: "Invalid ID or password for ${role.replace('_', ' ')}. Please check your credentials or contact school office."
             }
-            is DataUiState.Error -> {
-                retryCloudSync(userInitiated = false)
-                return "Refreshing school connection... Please wait 2 seconds and tap Sign In again."
-            }
-            is DataUiState.Success -> {
-                val users = state.data
-                if (users.isEmpty()) {
-                    retryCloudSync(userInitiated = false)
-                    return "Setting up school portal for your Google account. Please tap Sign In again in 2 seconds."
-                }
-
-                val match = users.firstOrNull {
-                    it.role == role &&
-                        it.userId.trim().equals(cleanId, ignoreCase = true) &&
-                        it.password.trim() == cleanPw
-                }
-                if (match != null) {
-                    _activeSchoolUserDocId.value = match.id
-                    viewModelScope.launch {
-                        sessionPrefs.saveRoleSession(
-                            ownerUid = ownerUid,
-                            docId = match.id,
-                            userId = match.userId.trim(),
-                            role = match.role,
-                        )
-                    }
-                    return null
-                }
-
-                val sameIdSameRole = users.firstOrNull {
-                    it.role == role && it.userId.trim().equals(cleanId, ignoreCase = true)
-                }
-                if (sameIdSameRole != null) {
-                    return "Incorrect password for '$cleanId'. Please check spelling/capitals or contact school office."
-                }
-
-                val sameIdOtherRole = users.firstOrNull {
-                    it.userId.trim().equals(cleanId, ignoreCase = true)
-                }
-                if (sameIdOtherRole != null) {
-                    val roleLabel = when (sameIdOtherRole.role) {
-                        "ADMIN" -> "Principal"
-                        "TEACHER" -> "Teacher"
-                        "FEE_MANAGER" -> "Accounts"
-                        else -> "Student"
-                    }
-                    return "'$cleanId' is a $roleLabel ID. Please select the $roleLabel button above and tap Sign In."
-                }
-
-                return "ID '$cleanId' was not found. Parents: please enter the Admission No given by the school office (for example, DPS2026-001)."
-            }
-        }
+        )
     }
 
     fun logoutSchoolRole() {
         _activeSchoolUserDocId.value = null
+        _isMemberReady.value = false
         viewModelScope.launch {
             sessionPrefs.clearRoleSession()
+            repository.clearCurrentMemberSession()
         }
     }
 
@@ -363,20 +353,65 @@ class SchoolViewModel(
         }
     }
 
-    // --- Admin Actions ---
+    // --- Account Management (Admin full control + Teacher scoped to own class-section) ---
     fun saveUserAccount(user: SchoolUser) {
         viewModelScope.launch {
             val allUsers = (usersState.value as? DataUiState.Success)?.data ?: emptyList()
-            val dup = allUsers.firstOrNull {
-                it.userId.equals(user.userId.trim(), ignoreCase = true) && it.id != user.id
+            val editor = activeSchoolUser.value
+            val editorRole = editor?.role ?: "ADMIN"
+
+            val preparedUser = if (editorRole == "TEACHER") {
+                if (editor == null || editor.className.isBlank() || editor.section.isBlank()) {
+                    _toastMessage.value = "Your teacher profile does not have an assigned class & section."
+                    return@launch
+                }
+                val autoId = if (user.id.isBlank() && user.userId.isBlank()) {
+                    SchoolCatalog.nextStudentRollNumber(allUsers)
+                } else user.userId.trim()
+                user.copy(
+                    role = "STUDENT",
+                    userId = autoId,
+                    wing = SchoolCatalog.wingForClass(editor.className),
+                    className = editor.className,
+                    section = editor.section,
+                    subject = "",
+                )
+            } else {
+                val autoId = if (user.role == "STUDENT" && user.id.isBlank() && user.userId.isBlank()) {
+                    SchoolCatalog.nextStudentRollNumber(allUsers)
+                } else user.userId.trim()
+                user.copy(userId = autoId)
             }
-            if (dup != null) {
-                _toastMessage.value = "User ID '${user.userId}' already exists!"
+
+            if (preparedUser.fullName.isBlank() || preparedUser.userId.isBlank() || preparedUser.password.isBlank()) {
+                _toastMessage.value = "Full name, Roll/User ID, and password are required."
                 return@launch
             }
-            repository.saveUser(user)
-                .onSuccess { _toastMessage.value = "${user.role.replace('_', ' ')} account saved & live!" }
+
+            val dup = allUsers.firstOrNull {
+                it.userId.equals(preparedUser.userId.trim(), ignoreCase = true) && it.id != preparedUser.id
+            }
+            if (dup != null) {
+                _toastMessage.value = "User ID '${preparedUser.userId}' already exists!"
+                return@launch
+            }
+            repository.saveUser(preparedUser, editorRole)
+                .onSuccess {
+                    _toastMessage.value = if (preparedUser.role == "STUDENT") {
+                        "Student ${preparedUser.fullName} (Roll ${preparedUser.userId}) saved to cloud!"
+                    } else {
+                        "${preparedUser.role.replace('_', ' ')} account saved & live!"
+                    }
+                }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to save account." }
+        }
+    }
+
+    fun deleteUser(user: SchoolUser) {
+        viewModelScope.launch {
+            repository.deleteUserAccount(user)
+                .onSuccess { _toastMessage.value = "${user.fullName} account removed." }
+                .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to remove account." }
         }
     }
 
@@ -391,8 +426,19 @@ class SchoolViewModel(
     fun postCircular(circular: Circular) {
         viewModelScope.launch {
             repository.addCircular(circular)
-                .onSuccess { _toastMessage.value = "Principal Circular published to all roles!" }
-                .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to post circular." }
+                .onSuccess {
+                    val senderTag = if (circular.senderRole == "TEACHER") "Notice" else "Circular"
+                    _toastMessage.value = "$senderTag published to ${circular.audience}!"
+                }
+                .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to publish notice." }
+        }
+    }
+
+    fun publishCampusPoster(poster: CampusPoster) {
+        viewModelScope.launch {
+            repository.addCampusPoster(poster)
+                .onSuccess { _toastMessage.value = "Daily campus poster published for all students!" }
+                .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to publish campus poster." }
         }
     }
 
@@ -416,6 +462,20 @@ class SchoolViewModel(
             } else {
                 _toastMessage.value = failed?.localizedMessage ?: "Failed saving some weekly marks."
             }
+        }
+    }
+
+    fun saveTimetable(
+        className: String,
+        section: String,
+        slots: List<SchoolCatalog.TimetableSlot>,
+        updatedBy: String,
+    ) {
+        viewModelScope.launch {
+            val slotMaps = slots.map { it.toSlotMap() }
+            repository.saveTimetable(className, section, slotMaps, updatedBy)
+                .onSuccess { _toastMessage.value = "Timetable saved for $className-$section!" }
+                .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to save timetable." }
         }
     }
 
@@ -600,7 +660,7 @@ class SchoolViewModel(
         }
     }
 
-    // --- Craft & Project Skill AI Studio (Firebase AI Logic Nano Banana 2.1 + Firestore) ---
+    // --- Craft & Project Skill Studio (Unique 1-Like-Per-User via Firestore Transaction) ---
 
     fun selectAiPersona(persona: AiTutorPersona) {
         _aiPersona.value = persona
@@ -610,7 +670,7 @@ class SchoolViewModel(
         _aiMessages.value = listOf(
             AiChatMessage(
                 isUser = false,
-                text = "New conversation started with ${_aiPersona.value.label}. Ask anything!"
+                text = "New conversation started."
             )
         )
         _aiTutorState.value = AiTutorUiState.Idle
@@ -659,19 +719,16 @@ class SchoolViewModel(
                     }
                     _craftAiImageState.value = CraftAiImageState.Success(base64Data = base64, promptUsed = prompt)
                 } else {
-                    _craftAiImageState.value = CraftAiImageState.Error("School AI model did not return an image. Please refine your craft description and try again.")
+                    _craftAiImageState.value = CraftAiImageState.Error("Model did not return an image.")
                 }
             } catch (e: TimeoutCancellationException) {
-                Log.e(TAG, "Craft AI image generation timed out", e)
-                _craftAiImageState.value = CraftAiImageState.Error("Image generation timed out after 60 seconds. Please retry.")
+                _craftAiImageState.value = CraftAiImageState.Error("Image generation timed out.")
             } catch (e: QuotaExceededException) {
-                Log.e(TAG, "Craft AI image quota exceeded", e)
-                _craftAiImageState.value = CraftAiImageState.Error("AI image quota/rate limit reached. Please try again shortly.")
+                _craftAiImageState.value = CraftAiImageState.Error("Quota limit reached.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Craft AI image generation failed", e)
-                _craftAiImageState.value = CraftAiImageState.Error(e.localizedMessage ?: "Failed to generate craft AI image.")
+                _craftAiImageState.value = CraftAiImageState.Error(e.localizedMessage ?: "Failed to generate craft image.")
             }
         }
     }
@@ -694,22 +751,13 @@ class SchoolViewModel(
                         encodeBitmapToBase64(bitmap)
                     }
                     repository.updateCraftProjectAiImage(project.id, base64, prompt)
-                        .onSuccess { _toastMessage.value = "School AI concept image added to \"${project.title}\"!" }
-                        .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed saving AI image." }
-                } else {
-                    _toastMessage.value = "School AI model returned no image. Please try again."
+                        .onSuccess { _toastMessage.value = "Concept image added to \"${project.title}\"!" }
+                        .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed saving image." }
                 }
-            } catch (e: TimeoutCancellationException) {
-                Log.e(TAG, "Craft post AI image timed out", e)
-                _toastMessage.value = "AI image generation timed out after 60s. Please retry."
-            } catch (e: QuotaExceededException) {
-                Log.e(TAG, "Craft post AI quota exceeded", e)
-                _toastMessage.value = "AI image quota exceeded. Please try again later."
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Craft post AI image failed", e)
-                _toastMessage.value = e.localizedMessage ?: "AI image generation failed."
+                _toastMessage.value = e.localizedMessage ?: "Image generation failed."
             } finally {
                 _generatingCraftPostId.value = null
             }
@@ -728,28 +776,32 @@ class SchoolViewModel(
     }
 
     fun applaudCraftProject(project: CraftProject) {
+        val currentUser = activeSchoolUser.value ?: return
+        if (project.id in _likingProjectIds.value) return
+        _likingProjectIds.value += project.id
         viewModelScope.launch {
-            repository.likeCraftProject(project.id, project.likesCount)
-                .onFailure { _toastMessage.value = it.localizedMessage ?: "Could not update applause." }
+            try {
+                repository.toggleCraftProjectLike(project.id, currentUser.id)
+                    .onSuccess { liked ->
+                        _toastMessage.value = if (liked) "Liked! (1 like per account)" else "Like removed."
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Could not update like." }
+            } finally {
+                _likingProjectIds.value -= project.id
+            }
         }
     }
 
-    // --- Firebase AI Logic (Multi-Turn Streaming Gemini 3.8 Flash Chat) ---
     fun askAiTutor(student: SchoolUser, question: String) {
         val trimmed = question.trim()
         if (trimmed.isEmpty() || _aiTutorState.value is AiTutorUiState.Loading || _aiTutorState.value is AiTutorUiState.Streaming) {
             return
         }
-
         val priorHistory = _aiMessages.value.drop(1).map { msg ->
-            content(if (msg.isUser) "user" else "model") {
-                text(msg.text)
-            }
+            content(if (msg.isUser) "user" else "model") { text(msg.text) }
         }
-
         _aiMessages.value = _aiMessages.value + AiChatMessage(isUser = true, text = trimmed)
         _aiTutorState.value = AiTutorUiState.Loading
-
         viewModelScope.launch {
             val classDesc = if (student.className.isNotBlank()) "${student.className}-${student.section}" else student.wing
             val fullPrompt = "Student: ${student.fullName} ($classDesc). Question: $trimmed"
@@ -771,16 +823,12 @@ class SchoolViewModel(
                     _aiMessages.value = _aiMessages.value + AiChatMessage(isUser = false, text = finalAnswer)
                     _aiTutorState.value = AiTutorUiState.Idle
                 } else {
-                    _aiTutorState.value = AiTutorUiState.Error("AI Tutor returned an empty response.")
+                    _aiTutorState.value = AiTutorUiState.Error("Empty response.")
                 }
-            } catch (e: TimeoutCancellationException) {
-                Log.e(TAG, "Gemini AI request timed out", e)
-                _aiTutorState.value = AiTutorUiState.Error("Request timed out after 60 seconds. Please try again.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Firebase AI Logic error", e)
-                _aiTutorState.value = AiTutorUiState.Error(e.localizedMessage ?: "Failed to reach Gemini AI.")
+                _aiTutorState.value = AiTutorUiState.Error(e.localizedMessage ?: "Request failed.")
             }
         }
     }

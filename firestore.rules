@@ -69,6 +69,9 @@ service cloud.firestore {
              data.title is string && data.title.size() >= 1 && data.title.size() <= 150 &&
              data.category is string && data.category.size() >= 1 && data.category.size() <= 40 &&
              data.audience is string && data.audience.size() >= 1 && data.audience.size() <= 120 &&
+             data.get('targetWing', '') is string && data.get('targetWing', '').size() <= 60 &&
+             data.get('targetClass', '') is string && data.get('targetClass', '').size() <= 30 &&
+             data.get('targetSection', '') is string && data.get('targetSection', '').size() <= 10 &&
              data.date is string && data.date.size() >= 1 && data.date.size() <= 20 &&
              data.content is string && data.content.size() >= 1 && data.content.size() <= 2000 &&
              data.postedBy is string && data.postedBy.size() >= 1 && data.postedBy.size() <= 100 &&
@@ -221,233 +224,526 @@ service cloud.firestore {
              data.likesCount is int && data.likesCount >= 0;
     }
 
-    match /accounts/{ownerUid} {
+    function isValidCraftLike(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.projectId is string && data.projectId.size() >= 1 && data.projectId.size() <= 128 &&
+             data.likerId is string && data.likerId.size() >= 1 && data.likerId.size() <= 128;
+    }
+
+    function isValidCampusPoster(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+             data.subtitle is string && data.subtitle.size() <= 180 &&
+             data.date is string && data.date.size() >= 1 && data.date.size() <= 30 &&
+             data.imageData is string && data.imageData.size() >= 1 && data.imageData.size() <= 460000 &&
+             data.postedBy is string && data.postedBy.size() >= 1 && data.postedBy.size() <= 100;
+    }
+
+    function isValidTimetable(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.className is string && data.className.size() >= 1 && data.className.size() <= 30 &&
+             data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+             data.slots is list && data.slots.size() >= 1 && data.slots.size() <= 16 &&
+             data.slots[0] is map &&
+             data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 100;
+    }
+
+    function isValidLoginTicket(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.schoolUserDocId is string && data.schoolUserDocId.size() >= 1 && data.schoolUserDocId.size() <= 128 &&
+             data.role in ['ADMIN', 'TEACHER', 'FEE_MANAGER', 'STUDENT'] &&
+             data.userId is string && data.userId.size() >= 2 && data.userId.size() <= 40 &&
+             data.className is string && data.className.size() <= 30 &&
+             data.section is string && data.section.size() <= 10;
+    }
+
+    // Legacy per-account path kept strictly read-only for owner during one-time migration
+    match /accounts/{ownerUid}/{colName}/{docId} {
+      allow list: if isOwner(ownerUid);
+      allow get: if isValidId(docId) && isOwner(ownerUid);
+      allow write: if false;
+    }
+
+    // Shared multi-device school cloud database
+    match /schools/{schoolId} {
+      function memberPath(uid) {
+        return /databases/$(database)/documents/schools/$(schoolId)/members/$(uid);
+      }
+
+      function loginTicketPath(ticketId) {
+        return /databases/$(database)/documents/schools/$(schoolId)/loginIndex/$(ticketId);
+      }
+
+      function userDocPath(docId) {
+        return /databases/$(database)/documents/schools/$(schoolId)/users/$(docId);
+      }
+
+      function craftProjectPath(projId) {
+        return /databases/$(database)/documents/schools/$(schoolId)/craftProjects/$(projId);
+      }
+
+      function craftLikePath(likeDocId) {
+        return /databases/$(database)/documents/schools/$(schoolId)/craftLikes/$(likeDocId);
+      }
+
+      function isSchoolInitialized() {
+        return exists(/databases/$(database)/documents/schools/$(schoolId));
+      }
+
+      function isBootstrappingBatch() {
+        return isSignedIn() &&
+               !isSchoolInitialized() &&
+               existsAfter(/databases/$(database)/documents/schools/$(schoolId)) &&
+               incoming().ownerUid == request.auth.uid;
+      }
+
+      function isMember() {
+        return isSignedIn() && exists(memberPath(request.auth.uid));
+      }
+
+      function memberData() {
+        return get(memberPath(request.auth.uid)).data;
+      }
+
+      function memberRole() {
+        return memberData().role;
+      }
+
+      function memberUserDocId() {
+        return memberData().schoolUserDocId;
+      }
+
+      function isAdmin() {
+        return isMember() && memberRole() == 'ADMIN';
+      }
+
+      function isTeacher() {
+        return isMember() && memberRole() == 'TEACHER';
+      }
+
+      function isFeeManager() {
+        return isMember() && memberRole() == 'FEE_MANAGER';
+      }
+
+      function teacherOwnsClassSection(cls, sec) {
+        return isTeacher() &&
+               cls is string && cls.size() > 0 &&
+               sec is string && sec.size() > 0 &&
+               exists(userDocPath(memberUserDocId())) &&
+               get(userDocPath(memberUserDocId())).data.className == cls &&
+               get(userDocPath(memberUserDocId())).data.section == sec;
+      }
+
+      allow get: if isSignedIn() && isValidId(schoolId);
+      allow list: if false;
+      allow create: if isSignedIn() && isValidId(schoolId) &&
+        !isSchoolInitialized() &&
+        incoming().ownerUid == request.auth.uid &&
+        incoming().keys().hasAll(['ownerUid', 'name', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['ownerUid', 'name', 'createdAt', 'updatedAt']) &&
+        isValidTimestampsCreate() &&
+        incoming().name is string && incoming().name.size() >= 1 && incoming().name.size() <= 120;
+      allow update, delete: if false;
+
+      match /members/{authUid} {
+        allow list: if false;
+        allow get: if isOwner(authUid) && isValidId(authUid);
+        allow create: if isOwner(authUid) && isValidId(authUid) &&
+          incoming().ownerUid == authUid &&
+          incoming().keys().hasAll(['ownerUid', 'schoolUserDocId', 'role', 'loginTicketId', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'schoolUserDocId', 'role', 'loginTicketId', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          incoming().role in ['ADMIN', 'TEACHER', 'FEE_MANAGER', 'STUDENT'] &&
+          isValidId(incoming().schoolUserDocId) &&
+          isValidId(incoming().loginTicketId) &&
+          existsAfter(loginTicketPath(incoming().loginTicketId)) &&
+          getAfter(loginTicketPath(incoming().loginTicketId)).data.schoolUserDocId == incoming().schoolUserDocId &&
+          getAfter(loginTicketPath(incoming().loginTicketId)).data.role == incoming().role;
+        allow update: if isOwner(authUid) && isValidId(authUid) &&
+          incoming().ownerUid == existing().ownerUid &&
+          isValidTimestampsUpdate() &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['schoolUserDocId', 'role', 'loginTicketId', 'updatedAt']) &&
+          incoming().role in ['ADMIN', 'TEACHER', 'FEE_MANAGER', 'STUDENT'] &&
+          isValidId(incoming().schoolUserDocId) &&
+          isValidId(incoming().loginTicketId) &&
+          existsAfter(loginTicketPath(incoming().loginTicketId)) &&
+          getAfter(loginTicketPath(incoming().loginTicketId)).data.schoolUserDocId == incoming().schoolUserDocId &&
+          getAfter(loginTicketPath(incoming().loginTicketId)).data.role == incoming().role;
+        allow delete: if isOwner(authUid) && isValidId(authUid);
+      }
+
+      match /loginIndex/{ticketId} {
+        allow list: if false;
+        allow get: if isSignedIn() && isValidId(ticketId);
+        allow create: if isSignedIn() && isValidId(ticketId) &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().keys().hasAll(['ownerUid', 'schoolUserDocId', 'role', 'userId', 'className', 'section', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'schoolUserDocId', 'role', 'userId', 'className', 'section', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidLoginTicket(incoming()) &&
+          (
+            isBootstrappingBatch() ||
+            isAdmin() ||
+            (teacherOwnsClassSection(incoming().className, incoming().section) && incoming().role == 'STUDENT') ||
+            (isMember() && incoming().schoolUserDocId == memberUserDocId() && incoming().role == memberRole())
+          );
+        allow update: if isSignedIn() && isValidId(ticketId) &&
+          isValidTimestampsUpdate() &&
+          isValidLoginTicket(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['ownerUid', 'schoolUserDocId', 'role', 'userId', 'className', 'section', 'updatedAt']) &&
+          (
+            isAdmin() ||
+            (teacherOwnsClassSection(incoming().className, incoming().section) && incoming().role == 'STUDENT') ||
+            (isMember() && existing().schoolUserDocId == memberUserDocId() && incoming().schoolUserDocId == existing().schoolUserDocId && incoming().role == existing().role)
+          );
+        allow delete: if isSignedIn() && isValidId(ticketId) &&
+          (
+            isAdmin() ||
+            (teacherOwnsClassSection(existing().className, existing().section) && existing().role == 'STUDENT') ||
+            (isMember() && existing().schoolUserDocId == memberUserDocId())
+          );
+      }
+
       match /users/{docId} {
-        allow list: if isOwner(ownerUid);
-        allow get: if isValidId(docId) && isOwner(ownerUid);
-        allow create: if isOwner(ownerUid) && isValidId(docId) &&
-          incoming().ownerUid == ownerUid &&
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
           incoming().keys().hasAll(['ownerUid', 'role', 'userId', 'password', 'fullName', 'phone', 'wing', 'className', 'section', 'subject', 'parentName', 'monthlyTuition', 'transportFee', 'createdAt', 'updatedAt']) &&
           incoming().keys().hasOnly(['ownerUid', 'role', 'userId', 'password', 'fullName', 'phone', 'wing', 'className', 'section', 'subject', 'parentName', 'monthlyTuition', 'transportFee', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
-          isValidSchoolUser(incoming());
-        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          isValidSchoolUser(incoming()) &&
+          (
+            isBootstrappingBatch() ||
+            isAdmin() ||
+            (teacherOwnsClassSection(incoming().className, incoming().section) && incoming().role == 'STUDENT')
+          );
+        allow update: if isMember() && isValidId(docId) &&
           incoming().ownerUid == existing().ownerUid &&
           isValidTimestampsUpdate() &&
           isValidSchoolUser(incoming()) &&
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'phone', 'password', 'updatedAt']) ||
-            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'userId', 'password', 'fullName', 'phone', 'wing', 'className', 'section', 'subject', 'parentName', 'monthlyTuition', 'transportFee', 'updatedAt'])
+            (docId == memberUserDocId() &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'phone', 'password', 'updatedAt'])) ||
+            (isAdmin() &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['role', 'userId', 'password', 'fullName', 'phone', 'wing', 'className', 'section', 'subject', 'parentName', 'monthlyTuition', 'transportFee', 'updatedAt'])) ||
+            (teacherOwnsClassSection(existing().className, existing().section) &&
+              existing().role == 'STUDENT' &&
+              incoming().role == 'STUDENT' &&
+              incoming().className == existing().className &&
+              incoming().section == existing().section &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['userId', 'password', 'fullName', 'phone', 'wing', 'className', 'section', 'subject', 'parentName', 'monthlyTuition', 'transportFee', 'updatedAt']))
           );
-        allow delete: if isOwner(ownerUid) && isValidId(docId);
+        allow delete: if isValidId(docId) &&
+          (
+            isAdmin() ||
+            (teacherOwnsClassSection(existing().className, existing().section) && existing().role == 'STUDENT')
+          );
       }
 
       match /gatewayConfig/{docId} {
-        allow list: if isOwner(ownerUid);
-        allow get: if isValidId(docId) && isOwner(ownerUid);
-        allow create: if isOwner(ownerUid) && isValidId(docId) &&
-          incoming().ownerUid == ownerUid &&
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
           incoming().keys().hasAll(['ownerUid', 'merchantUpi', 'payeeName', 'bankName', 'accountNo', 'ifsc', 'razorpayKeyId', 'createdAt', 'updatedAt']) &&
           incoming().keys().hasOnly(['ownerUid', 'merchantUpi', 'payeeName', 'bankName', 'accountNo', 'ifsc', 'razorpayKeyId', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
-          isValidGatewayConfig(incoming());
-        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          isValidGatewayConfig(incoming()) &&
+          (isBootstrappingBatch() || isAdmin() || isFeeManager());
+        allow update: if isValidId(docId) &&
+          (isAdmin() || isFeeManager()) &&
           incoming().ownerUid == existing().ownerUid &&
           isValidTimestampsUpdate() &&
           isValidGatewayConfig(incoming()) &&
           incoming().diff(existing()).affectedKeys().hasOnly(['merchantUpi', 'payeeName', 'bankName', 'accountNo', 'ifsc', 'razorpayKeyId', 'updatedAt']);
-        allow delete: if isOwner(ownerUid) && isValidId(docId);
+        allow delete: if isValidId(docId) && (isAdmin() || isFeeManager());
       }
 
       match /circulars/{docId} {
-        allow list: if isOwner(ownerUid);
-        allow get: if isValidId(docId) && isOwner(ownerUid);
-        allow create: if isOwner(ownerUid) && isValidId(docId) &&
-          incoming().ownerUid == ownerUid &&
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
           incoming().keys().hasAll(['ownerUid', 'title', 'category', 'audience', 'date', 'content', 'postedBy', 'recipientDocId', 'recipientName', 'senderRole', 'attachmentName', 'attachmentMimeType', 'attachmentData', 'createdAt', 'updatedAt']) &&
-          incoming().keys().hasOnly(['ownerUid', 'title', 'category', 'audience', 'date', 'content', 'postedBy', 'recipientDocId', 'recipientName', 'senderRole', 'attachmentName', 'attachmentMimeType', 'attachmentData', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'title', 'category', 'audience', 'targetWing', 'targetClass', 'targetSection', 'date', 'content', 'postedBy', 'recipientDocId', 'recipientName', 'senderRole', 'attachmentName', 'attachmentMimeType', 'attachmentData', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
-          isValidCircular(incoming());
-        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          isValidCircular(incoming()) &&
+          (isBootstrappingBatch() || isAdmin() || isTeacher());
+        allow update: if isValidId(docId) &&
+          (isAdmin() || isTeacher()) &&
           incoming().ownerUid == existing().ownerUid &&
           isValidTimestampsUpdate() &&
           isValidCircular(incoming()) &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'category', 'audience', 'date', 'content', 'postedBy', 'recipientDocId', 'recipientName', 'senderRole', 'attachmentName', 'attachmentMimeType', 'attachmentData', 'updatedAt']);
-        allow delete: if isOwner(ownerUid) && isValidId(docId);
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'category', 'audience', 'targetWing', 'targetClass', 'targetSection', 'date', 'content', 'postedBy', 'recipientDocId', 'recipientName', 'senderRole', 'attachmentName', 'attachmentMimeType', 'attachmentData', 'updatedAt']);
+        allow delete: if isValidId(docId) && (isAdmin() || isTeacher());
       }
 
       match /dptDaily/{docId} {
-        allow list: if isOwner(ownerUid);
-        allow get: if isValidId(docId) && isOwner(ownerUid);
-        allow create: if isOwner(ownerUid) && isValidId(docId) &&
-          incoming().ownerUid == ownerUid &&
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
           incoming().keys().hasAll(['ownerUid', 'date', 'className', 'section', 'subject', 'assessmentType', 'held', 'topic', 'maxMarks', 'notes', 'reason', 'attachmentName', 'attachmentMimeType', 'attachmentData', 'teacherId', 'teacherName', 'createdAt', 'updatedAt']) &&
           incoming().keys().hasOnly(['ownerUid', 'date', 'className', 'section', 'subject', 'assessmentType', 'held', 'topic', 'maxMarks', 'notes', 'reason', 'attachmentName', 'attachmentMimeType', 'attachmentData', 'teacherId', 'teacherName', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
-          isValidDptDaily(incoming());
-        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          isValidDptDaily(incoming()) &&
+          (isBootstrappingBatch() || isAdmin() || isTeacher());
+        allow update: if isValidId(docId) &&
+          (isAdmin() || isTeacher()) &&
           incoming().ownerUid == existing().ownerUid &&
           isValidTimestampsUpdate() &&
           isValidDptDaily(incoming()) &&
           incoming().diff(existing()).affectedKeys().hasOnly(['assessmentType', 'held', 'topic', 'maxMarks', 'notes', 'reason', 'attachmentName', 'attachmentMimeType', 'attachmentData', 'teacherId', 'teacherName', 'updatedAt']);
-        allow delete: if isOwner(ownerUid) && isValidId(docId);
+        allow delete: if isValidId(docId) && (isAdmin() || isTeacher());
       }
 
       match /dptWeekly/{docId} {
-        allow list: if isOwner(ownerUid);
-        allow get: if isValidId(docId) && isOwner(ownerUid);
-        allow create: if isOwner(ownerUid) && isValidId(docId) &&
-          incoming().ownerUid == ownerUid &&
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
           incoming().keys().hasAll(['ownerUid', 'week', 'className', 'section', 'subject', 'studentDocId', 'studentName', 'admissionNo', 'scored', 'maxMarks', 'teacherId', 'createdAt', 'updatedAt']) &&
           incoming().keys().hasOnly(['ownerUid', 'week', 'className', 'section', 'subject', 'studentDocId', 'studentName', 'admissionNo', 'scored', 'maxMarks', 'teacherId', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
-          isValidDptWeekly(incoming());
-        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          isValidDptWeekly(incoming()) &&
+          (isBootstrappingBatch() || isAdmin() || isTeacher());
+        allow update: if isValidId(docId) &&
+          (isAdmin() || isTeacher()) &&
           incoming().ownerUid == existing().ownerUid &&
           isValidTimestampsUpdate() &&
           isValidDptWeekly(incoming()) &&
           incoming().diff(existing()).affectedKeys().hasOnly(['scored', 'maxMarks', 'teacherId', 'updatedAt']);
-        allow delete: if isOwner(ownerUid) && isValidId(docId);
+        allow delete: if isValidId(docId) && (isAdmin() || isTeacher());
       }
 
       match /attendance/{docId} {
-        allow list: if isOwner(ownerUid);
-        allow get: if isValidId(docId) && isOwner(ownerUid);
-        allow create: if isOwner(ownerUid) && isValidId(docId) &&
-          incoming().ownerUid == ownerUid &&
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
           incoming().keys().hasAll(['ownerUid', 'date', 'className', 'section', 'studentDocId', 'status', 'markedBy', 'createdAt', 'updatedAt']) &&
           incoming().keys().hasOnly(['ownerUid', 'date', 'className', 'section', 'studentDocId', 'status', 'markedBy', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
-          isValidAttendance(incoming());
-        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          isValidAttendance(incoming()) &&
+          (isBootstrappingBatch() || isAdmin() || isTeacher());
+        allow update: if isValidId(docId) &&
+          (isAdmin() || isTeacher()) &&
           incoming().ownerUid == existing().ownerUid &&
           isValidTimestampsUpdate() &&
           isValidAttendance(incoming()) &&
           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'markedBy', 'updatedAt']);
-        allow delete: if isOwner(ownerUid) && isValidId(docId);
+        allow delete: if isValidId(docId) && (isAdmin() || isTeacher());
       }
 
       match /leaves/{docId} {
-        allow list: if isOwner(ownerUid);
-        allow get: if isValidId(docId) && isOwner(ownerUid);
-        allow create: if isOwner(ownerUid) && isValidId(docId) &&
-          incoming().ownerUid == ownerUid &&
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
           incoming().keys().hasAll(['ownerUid', 'studentDocId', 'studentName', 'admissionNo', 'className', 'section', 'fromDate', 'toDate', 'reason', 'status', 'teacherRemark', 'createdAt', 'updatedAt']) &&
           incoming().keys().hasOnly(['ownerUid', 'studentDocId', 'studentName', 'admissionNo', 'className', 'section', 'fromDate', 'toDate', 'reason', 'status', 'teacherRemark', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
-          isValidLeave(incoming());
-        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          isValidLeave(incoming()) &&
+          (isBootstrappingBatch() || isMember());
+        allow update: if isValidId(docId) &&
+          (isAdmin() || isTeacher()) &&
           incoming().ownerUid == existing().ownerUid &&
           existing().status == 'Pending' &&
           isValidTimestampsUpdate() &&
           isValidLeave(incoming()) &&
           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'teacherRemark', 'updatedAt']);
-        allow delete: if isOwner(ownerUid) && isValidId(docId);
+        allow delete: if isValidId(docId) && (isAdmin() || isTeacher() || (isMember() && existing().studentDocId == memberUserDocId()));
       }
 
       match /homework/{docId} {
-        allow list: if isOwner(ownerUid);
-        allow get: if isValidId(docId) && isOwner(ownerUid);
-        allow create: if isOwner(ownerUid) && isValidId(docId) &&
-          incoming().ownerUid == ownerUid &&
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
           incoming().keys().hasAll(['ownerUid', 'className', 'section', 'subject', 'title', 'description', 'dueDate', 'teacherName', 'createdAt', 'updatedAt']) &&
           incoming().keys().hasOnly(['ownerUid', 'className', 'section', 'subject', 'title', 'description', 'dueDate', 'teacherName', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
-          isValidHomework(incoming());
-        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          isValidHomework(incoming()) &&
+          (isBootstrappingBatch() || isAdmin() || isTeacher());
+        allow update: if isValidId(docId) &&
+          (isAdmin() || isTeacher()) &&
           incoming().ownerUid == existing().ownerUid &&
           isValidTimestampsUpdate() &&
           isValidHomework(incoming()) &&
           incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'dueDate', 'updatedAt']);
-        allow delete: if isOwner(ownerUid) && isValidId(docId);
+        allow delete: if isValidId(docId) && (isAdmin() || isTeacher());
       }
 
       match /termMarks/{docId} {
-        allow list: if isOwner(ownerUid);
-        allow get: if isValidId(docId) && isOwner(ownerUid);
-        allow create: if isOwner(ownerUid) && isValidId(docId) &&
-          incoming().ownerUid == ownerUid &&
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
           incoming().keys().hasAll(['ownerUid', 'term', 'className', 'section', 'studentDocId', 'studentName', 'admissionNo', 'marks', 'remarks', 'publishedBy', 'createdAt', 'updatedAt']) &&
           incoming().keys().hasOnly(['ownerUid', 'term', 'className', 'section', 'studentDocId', 'studentName', 'admissionNo', 'marks', 'remarks', 'publishedBy', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
-          isValidTermMark(incoming());
-        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          isValidTermMark(incoming()) &&
+          (isBootstrappingBatch() || isAdmin() || isTeacher());
+        allow update: if isValidId(docId) &&
+          (isAdmin() || isTeacher()) &&
           incoming().ownerUid == existing().ownerUid &&
           isValidTimestampsUpdate() &&
           isValidTermMark(incoming()) &&
           incoming().diff(existing()).affectedKeys().hasOnly(['marks', 'remarks', 'publishedBy', 'updatedAt']);
-        allow delete: if isOwner(ownerUid) && isValidId(docId);
+        allow delete: if isValidId(docId) && (isAdmin() || isTeacher());
       }
 
       match /feeItems/{docId} {
-        allow list: if isOwner(ownerUid);
-        allow get: if isValidId(docId) && isOwner(ownerUid);
-        allow create: if isOwner(ownerUid) && isValidId(docId) &&
-          incoming().ownerUid == ownerUid &&
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
           incoming().keys().hasAll(['ownerUid', 'studentDocId', 'title', 'month', 'amount', 'status', 'paymentId', 'createdAt', 'updatedAt']) &&
           incoming().keys().hasOnly(['ownerUid', 'studentDocId', 'title', 'month', 'amount', 'status', 'paymentId', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
-          isValidFeeItem(incoming());
-        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          isValidFeeItem(incoming()) &&
+          (isBootstrappingBatch() || isAdmin() || isFeeManager());
+        allow update: if isMember() && isValidId(docId) &&
           incoming().ownerUid == existing().ownerUid &&
           existing().status != 'PAID' &&
           isValidTimestampsUpdate() &&
           isValidFeeItem(incoming()) &&
           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paymentId', 'updatedAt']);
-        allow delete: if isOwner(ownerUid) && isValidId(docId) && existing().status == 'UNPAID';
+        allow delete: if isValidId(docId) && (isAdmin() || isFeeManager()) && existing().status == 'UNPAID';
       }
 
       match /payments/{docId} {
-        allow list: if isOwner(ownerUid);
-        allow get: if isValidId(docId) && isOwner(ownerUid);
-        allow create: if isOwner(ownerUid) && isValidId(docId) &&
-          incoming().ownerUid == ownerUid &&
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
           incoming().keys().hasAll(['ownerUid', 'studentDocId', 'studentName', 'admissionNo', 'className', 'feeItemIds', 'feeSummary', 'amount', 'mode', 'utrOrRef', 'upiApp', 'status', 'receiptNo', 'rejectReason', 'verifiedBy', 'verifiedAtStr', 'createdAt', 'updatedAt']) &&
           incoming().keys().hasOnly(['ownerUid', 'studentDocId', 'studentName', 'admissionNo', 'className', 'feeItemIds', 'feeSummary', 'amount', 'mode', 'utrOrRef', 'upiApp', 'status', 'receiptNo', 'rejectReason', 'verifiedBy', 'verifiedAtStr', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
-          isValidFeePayment(incoming());
-        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          isValidFeePayment(incoming()) &&
+          (isBootstrappingBatch() || isMember());
+        allow update: if isValidId(docId) &&
+          (isAdmin() || isFeeManager()) &&
           incoming().ownerUid == existing().ownerUid &&
           existing().status == 'PENDING' &&
           isValidTimestampsUpdate() &&
           isValidFeePayment(incoming()) &&
           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'receiptNo', 'rejectReason', 'verifiedBy', 'verifiedAtStr', 'updatedAt']);
-        allow delete: if isOwner(ownerUid) && isValidId(docId);
+        allow delete: if isValidId(docId) && (isAdmin() || isFeeManager());
       }
 
       match /doubts/{docId} {
-        allow list: if isOwner(ownerUid);
-        allow get: if isValidId(docId) && isOwner(ownerUid);
-        allow create: if isOwner(ownerUid) && isValidId(docId) &&
-          incoming().ownerUid == ownerUid &&
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
           incoming().keys().hasAll(['ownerUid', 'studentDocId', 'studentName', 'className', 'subject', 'message', 'reply', 'repliedBy', 'status', 'dateLabel', 'createdAt', 'updatedAt']) &&
           incoming().keys().hasOnly(['ownerUid', 'studentDocId', 'studentName', 'className', 'subject', 'message', 'reply', 'repliedBy', 'status', 'dateLabel', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
-          isValidDoubt(incoming());
-        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          isValidDoubt(incoming()) &&
+          (isBootstrappingBatch() || isMember());
+        allow update: if isValidId(docId) &&
+          (isAdmin() || isTeacher()) &&
           incoming().ownerUid == existing().ownerUid &&
           isValidTimestampsUpdate() &&
           isValidDoubt(incoming()) &&
           incoming().diff(existing()).affectedKeys().hasOnly(['reply', 'repliedBy', 'status', 'updatedAt']);
-        allow delete: if isOwner(ownerUid) && isValidId(docId);
+        allow delete: if isValidId(docId) && (isAdmin() || isTeacher() || (isMember() && existing().studentDocId == memberUserDocId()));
       }
 
       match /craftProjects/{docId} {
-        allow list: if isOwner(ownerUid);
-        allow get: if isValidId(docId) && isOwner(ownerUid);
-        allow create: if isOwner(ownerUid) && isValidId(docId) &&
-          incoming().ownerUid == ownerUid &&
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
           incoming().keys().hasAll(['ownerUid', 'title', 'category', 'description', 'materials', 'authorDocId', 'authorName', 'authorUserId', 'authorRole', 'classInfo', 'dateLabel', 'aiImageData', 'aiPromptUsed', 'likesCount', 'createdAt', 'updatedAt']) &&
           incoming().keys().hasOnly(['ownerUid', 'title', 'category', 'description', 'materials', 'authorDocId', 'authorName', 'authorUserId', 'authorRole', 'classInfo', 'dateLabel', 'aiImageData', 'aiPromptUsed', 'likesCount', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
-          isValidCraftProject(incoming());
-        allow update: if isOwner(ownerUid) && isValidId(docId) &&
+          isValidCraftProject(incoming()) &&
+          (isBootstrappingBatch() || isMember());
+        allow update: if isMember() && isValidId(docId) &&
           incoming().ownerUid == existing().ownerUid &&
           isValidTimestampsUpdate() &&
           isValidCraftProject(incoming()) &&
-          incoming().likesCount >= existing().likesCount &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['aiImageData', 'aiPromptUsed', 'likesCount', 'updatedAt']);
-        allow delete: if isOwner(ownerUid) && isValidId(docId);
+          (
+            (
+              incoming().diff(existing()).affectedKeys().hasOnly(['likesCount', 'updatedAt']) &&
+              incoming().likesCount == existing().likesCount + 1 &&
+              !exists(craftLikePath(docId + '__' + memberUserDocId())) &&
+              existsAfter(craftLikePath(docId + '__' + memberUserDocId()))
+            ) ||
+            (
+              incoming().diff(existing()).affectedKeys().hasOnly(['likesCount', 'updatedAt']) &&
+              existing().likesCount > 0 &&
+              incoming().likesCount == existing().likesCount - 1 &&
+              exists(craftLikePath(docId + '__' + memberUserDocId())) &&
+              !existsAfter(craftLikePath(docId + '__' + memberUserDocId()))
+            ) ||
+            (
+              incoming().diff(existing()).affectedKeys().hasOnly(['aiImageData', 'aiPromptUsed', 'updatedAt']) &&
+              (isAdmin() || existing().authorDocId == memberUserDocId())
+            )
+          );
+        allow delete: if isValidId(docId) && (isAdmin() || (isMember() && existing().authorDocId == memberUserDocId()));
+      }
+
+      match /craftLikes/{likeDocId} {
+        allow list: if isMember();
+        allow get: if isValidId(likeDocId) && isMember();
+        allow create: if isMember() && isValidId(likeDocId) &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().keys().hasAll(['ownerUid', 'projectId', 'likerId', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'projectId', 'likerId', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidCraftLike(incoming()) &&
+          likeDocId == incoming().projectId + '__' + incoming().likerId &&
+          incoming().likerId == memberUserDocId() &&
+          exists(craftProjectPath(incoming().projectId)) &&
+          get(craftProjectPath(incoming().projectId)).data.likesCount + 1 == getAfter(craftProjectPath(incoming().projectId)).data.likesCount;
+        allow update: if false;
+        allow delete: if isMember() && isValidId(likeDocId) &&
+          existing().likerId == memberUserDocId() &&
+          exists(craftProjectPath(existing().projectId)) &&
+          get(craftProjectPath(existing().projectId)).data.likesCount - 1 == getAfter(craftProjectPath(existing().projectId)).data.likesCount;
+      }
+
+      match /campusPosters/{docId} {
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().keys().hasAll(['ownerUid', 'title', 'subtitle', 'date', 'imageData', 'postedBy', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'title', 'subtitle', 'date', 'imageData', 'postedBy', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidCampusPoster(incoming()) &&
+          (isBootstrappingBatch() || isAdmin());
+        allow update: if isValidId(docId) &&
+          isAdmin() &&
+          incoming().ownerUid == existing().ownerUid &&
+          isValidTimestampsUpdate() &&
+          isValidCampusPoster(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'subtitle', 'date', 'imageData', 'postedBy', 'updatedAt']);
+        allow delete: if isValidId(docId) && isAdmin();
+      }
+
+      match /timetables/{docId} {
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().keys().hasAll(['ownerUid', 'className', 'section', 'slots', 'updatedBy', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'className', 'section', 'slots', 'updatedBy', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidTimetable(incoming()) &&
+          (isBootstrappingBatch() || isAdmin() || isTeacher());
+        allow update: if isValidId(docId) &&
+          (isAdmin() || isTeacher()) &&
+          incoming().ownerUid == existing().ownerUid &&
+          isValidTimestampsUpdate() &&
+          isValidTimetable(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['slots', 'updatedBy', 'updatedAt']);
+        allow delete: if isValidId(docId) && (isAdmin() || isTeacher());
       }
     }
   }
