@@ -30,6 +30,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.example.BuildConfig
 import com.example.data.model.*
 import com.example.ui.components.AttachmentPickerChip
 import com.example.ui.components.AttachmentPreviewBlock
@@ -72,6 +73,7 @@ fun AdminScreen(
     onPublishCraftProject: (CraftProject) -> Unit = {},
     onGenerateCraftImageForPost: (CraftProject) -> Unit = {},
     onApplaudCraftProject: (CraftProject) -> Unit = {},
+    onSaveGatewayConfig: (GatewayConfig) -> Unit = {},
     onNavigateToTab: (Int) -> Unit = {},
     onShowMessage: (String) -> Unit = {},
     onOpenProfileEdit: () -> Unit,
@@ -114,6 +116,7 @@ fun AdminScreen(
             campusPosters = campusPosters,
             onPublishCampusPoster = onPublishCampusPoster,
             onDeleteCampusPoster = { p -> onDeleteRecord("campusPosters", p.id, p.title) },
+            onSaveGatewayConfig = onSaveGatewayConfig,
             onOpenProgressDashboard = { showStudentProgressDashboard = true },
             onOpenFeePayments = { onNavigateToTab(3) },
             onOpenCraftStudio = { onNavigateToTab(4) },
@@ -176,6 +179,7 @@ private fun AdminDashboardTab(
     campusPosters: List<CampusPoster>,
     onPublishCampusPoster: (CampusPoster) -> Unit,
     onDeleteCampusPoster: (CampusPoster) -> Unit,
+    onSaveGatewayConfig: (GatewayConfig) -> Unit,
     onOpenProgressDashboard: () -> Unit,
     onOpenFeePayments: () -> Unit,
     onOpenCraftStudio: () -> Unit,
@@ -205,6 +209,22 @@ private fun AdminDashboardTab(
     var posterSubtitle by remember { mutableStateOf("") }
     var posterDate by remember { mutableStateOf(SchoolCatalog.todayIso()) }
     var posterImageBase64 by remember { mutableStateOf("") }
+
+    var updateVersionCodeStr by remember(gateway.latestVersionCode) {
+        mutableStateOf(maxOf(gateway.latestVersionCode, BuildConfig.VERSION_CODE.toLong()).toString())
+    }
+    var updateVersionName by remember(gateway.latestVersionName) {
+        mutableStateOf(gateway.latestVersionName.ifBlank { BuildConfig.VERSION_NAME })
+    }
+    var updateRepoSlug by remember(gateway.githubRepoSlug) {
+        mutableStateOf(gateway.githubRepoSlug)
+    }
+    var updateApkUrl by remember(gateway.apkDownloadUrl) {
+        mutableStateOf(gateway.apkDownloadUrl)
+    }
+    var updateReleaseNotes by remember(gateway.updateNotes) {
+        mutableStateOf(gateway.updateNotes)
+    }
 
     val posterPhotoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -572,6 +592,132 @@ private fun AdminDashboardTab(
             }
         }
 
+        // In-App App Update Publisher Card
+        item {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, EmeraldSuccess.copy(alpha = 0.55f)),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "IN-APP APP UPDATE PUBLISHER",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = EmeraldSuccess,
+                        )
+                        Surface(color = EmeraldContainer, shape = RoundedCornerShape(8.dp)) {
+                            Text(
+                                text = "Installed v${BuildConfig.VERSION_NAME} (B${BuildConfig.VERSION_CODE})",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = EmeraldSuccess,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            )
+                        }
+                    }
+                    Text(
+                        "Push New App Version to All Users Inside App",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "When you set a newer Version Code or link your GitHub repository, every installed phone gets an instant Install Update banner inside the app.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = updateVersionCodeStr,
+                            onValueChange = { ch -> updateVersionCodeStr = ch.filter { it.isDigit() }.take(6) },
+                            label = { Text("Version Code") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f).testTag("admin_update_code_input"),
+                        )
+                        OutlinedTextField(
+                            value = updateVersionName,
+                            onValueChange = { updateVersionName = it.take(30) },
+                            label = { Text("Version Name (e.g. 1.2)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1.3f).testTag("admin_update_name_input"),
+                        )
+                    }
+                    OutlinedTextField(
+                        value = updateRepoSlug,
+                        onValueChange = { updateRepoSlug = it.take(160) },
+                        label = { Text("GitHub Repo (owner/repo, optional)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("admin_update_repo_input"),
+                    )
+                    val cleanSlug = updateRepoSlug.trim()
+                        .removePrefix("https://github.com/")
+                        .removePrefix("http://github.com/")
+                        .trim('/')
+                    if (cleanSlug.contains('/')) {
+                        OutlinedButton(
+                            onClick = {
+                                updateApkUrl = "https://github.com/$cleanSlug/releases/latest/download/DoonPublicSchool-Etah.apk"
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(Icons.Filled.AutoFixHigh, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Auto-Fill Latest GitHub APK Link")
+                        }
+                    }
+                    OutlinedTextField(
+                        value = updateApkUrl,
+                        onValueChange = { updateApkUrl = it.take(500) },
+                        label = { Text("APK Download URL") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("admin_update_url_input"),
+                    )
+                    OutlinedTextField(
+                        value = updateReleaseNotes,
+                        onValueChange = { updateReleaseNotes = it.take(400) },
+                        label = { Text("What's New / Update Notes") },
+                        minLines = 2,
+                        maxLines = 3,
+                        modifier = Modifier.fillMaxWidth().testTag("admin_update_notes_input"),
+                    )
+                    Button(
+                        onClick = {
+                            val parsedCode = updateVersionCodeStr.toLongOrNull()?.coerceAtLeast(1L)
+                                ?: BuildConfig.VERSION_CODE.toLong()
+                            val resolvedUrl = updateApkUrl.trim().ifBlank {
+                                if (cleanSlug.contains('/')) "https://github.com/$cleanSlug/releases/latest/download/DoonPublicSchool-Etah.apk" else ""
+                            }
+                            if (resolvedUrl.isBlank() && !cleanSlug.contains('/')) {
+                                onShowMessage("Enter a GitHub owner/repo or direct APK download URL first.")
+                                return@Button
+                            }
+                            onSaveGatewayConfig(
+                                gateway.copy(
+                                    latestVersionCode = parsedCode,
+                                    latestVersionName = updateVersionName.trim().ifBlank { BuildConfig.VERSION_NAME },
+                                    apkDownloadUrl = resolvedUrl,
+                                    githubRepoSlug = cleanSlug,
+                                    updateNotes = updateReleaseNotes.trim(),
+                                )
+                            )
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("admin_publish_update_btn"),
+                    ) {
+                        Icon(Icons.Filled.SystemUpdate, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Publish Update to All Phones")
+                    }
+                }
+            }
+        }
+
         // 4 Official Academic Wings Overview
         item {
             Text(
@@ -824,6 +970,7 @@ private fun AdminAccountsTab(
     var filterRole by remember { mutableStateOf("ALL") }
 
     var classMenuExpanded by remember { mutableStateOf(false) }
+    var subjectMenuExpanded by remember { mutableStateOf(false) }
 
     LaunchedEffect(selectedRole, editingDocId, users) {
         if (editingDocId.isBlank() && selectedRole == "STUDENT") {
@@ -993,10 +1140,38 @@ private fun AdminAccountsTab(
                     }
 
                     if (selectedRole == "TEACHER") {
+                        val suggestedSubjects = remember(className) {
+                            (SchoolCatalog.subjectsForClass(className) + SchoolCatalog.allSubjects).distinct()
+                        }
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(
+                                onClick = { subjectMenuExpanded = true },
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth().height(48.dp).testTag("admin_pick_subject_btn"),
+                            ) {
+                                Icon(Icons.Filled.Book, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Select Subject: ${subject.ifBlank { "Choose" }}")
+                            }
+                            DropdownMenu(
+                                expanded = subjectMenuExpanded,
+                                onDismissRequest = { subjectMenuExpanded = false },
+                            ) {
+                                suggestedSubjects.forEach { sub ->
+                                    DropdownMenuItem(
+                                        text = { Text(sub) },
+                                        onClick = {
+                                            subject = sub
+                                            subjectMenuExpanded = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
                         OutlinedTextField(
                             value = subject,
                             onValueChange = { subject = it },
-                            label = { Text("Teaching Subject") },
+                            label = { Text("Teaching Subject (or type custom)") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )

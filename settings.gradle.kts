@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Doon Public School"
+rootProject.name = "Doon Public School, Etah"
 
 include(":app")

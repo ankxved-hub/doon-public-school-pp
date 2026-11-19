@@ -11,7 +11,7 @@ import java.util.Locale
 object SchoolInfo {
     const val SCHOOL_ID = "dps_etah"
     const val NAME = "Doon Public School, Etah"
-    const val SHORT_NAME = "Doon Public School"
+    const val SHORT_NAME = "Doon Public School, Etah"
     const val AFFILIATION = "CBSE Affiliated (Nursery to Class XII)"
     const val TRUST = "Managed by Murli Krishna Educational Trust"
     const val MOTTO = "Where Excellence is a Habit! — Excelling with Legacy, Leading with Purpose"
@@ -64,11 +64,93 @@ object SchoolCatalog {
         wings.firstOrNull { className in it.classes }?.name ?: "Upper School"
 
     fun subjectsForClass(className: String): List<String> = when (className) {
-        "Nursery", "LKG", "UKG" -> listOf("English", "Hindi", "Mathematics", "Rhymes & Phonics", "General Awareness")
-        "Class I", "Class II", "Class III", "Class IV", "Class V" -> listOf("English", "Hindi", "Mathematics", "EVS", "Computer")
-        "Class VI", "Class VII", "Class VIII" -> listOf("English", "Hindi", "Mathematics", "Science", "Social Science", "Sanskrit", "Computer")
-        else -> listOf("English", "Mathematics", "Science", "Social Science", "Hindi / Computer")
+        "Nursery", "LKG", "UKG" -> listOf(
+            "English",
+            "Hindi",
+            "Mathematics",
+            "Rhymes & Phonics",
+            "General Awareness",
+            "EVS & Nature",
+            "Art & Craft",
+            "Storytelling",
+            "Music & Movement",
+            "Physical Activity",
+        )
+        "Class I", "Class II", "Class III", "Class IV", "Class V" -> listOf(
+            "English",
+            "Hindi",
+            "Mathematics",
+            "EVS",
+            "Computer Science",
+            "General Knowledge",
+            "Moral Science",
+            "Art & Craft",
+            "Music & Dance",
+            "Physical Education",
+            "Reasoning & Aptitude",
+        )
+        "Class VI", "Class VII", "Class VIII" -> listOf(
+            "English",
+            "Hindi",
+            "Sanskrit",
+            "Mathematics",
+            "Science",
+            "Physics",
+            "Chemistry",
+            "Biology",
+            "Social Science",
+            "History & Civics",
+            "Geography",
+            "Computer Science & AI",
+            "General Knowledge",
+            "Moral Science",
+            "Art & Craft",
+            "Physical Education",
+        )
+        "Class IX", "Class X" -> listOf(
+            "English",
+            "Hindi",
+            "Sanskrit",
+            "Mathematics",
+            "Science",
+            "Physics",
+            "Chemistry",
+            "Biology",
+            "Social Science",
+            "History",
+            "Geography",
+            "Political Science",
+            "Economics",
+            "Information Technology (IT)",
+            "Artificial Intelligence (AI)",
+            "Computer Applications",
+            "Physical Education",
+            "Art & Culture",
+        )
+        else -> listOf(
+            "English Core",
+            "Hindi Core",
+            "Mathematics",
+            "Applied Mathematics",
+            "Physics",
+            "Chemistry",
+            "Biology",
+            "Computer Science",
+            "Informatics Practices",
+            "Accountancy",
+            "Business Studies",
+            "Economics",
+            "History",
+            "Geography",
+            "Political Science",
+            "Sociology",
+            "Psychology",
+            "Physical Education",
+            "Fine Arts",
+        )
     }
+
+    val allSubjects: List<String> = allClasses.flatMap { subjectsForClass(it) }.distinct()
 
     /**
      * Generates the next sequential student roll number: 001, 002, 003...
@@ -199,6 +281,11 @@ data class GatewayConfig(
     val accountNo: String = "39481020004512",
     val ifsc: String = "SBIN0004512",
     val razorpayKeyId: String = "",
+    val latestVersionCode: Long = 2L,
+    val latestVersionName: String = "1.1",
+    val apkDownloadUrl: String = "",
+    val githubRepoSlug: String = "",
+    val updateNotes: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null,
 )

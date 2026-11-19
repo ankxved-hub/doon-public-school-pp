@@ -404,4 +404,41 @@ test("Class-targeted circulars, daily campusPosters (Admin only), and per-class 
       updatedAt: ts(),
     })
   );
+
+  // Gateway config with in-app update metadata (Admin allowed, Student denied)
+  await assertSucceeds(
+    col(aliceDb, "gatewayConfig").doc("gw_main").set({
+      ownerUid: ALICE_UID,
+      merchantUpi: "doonpublicetah@sbi",
+      payeeName: "Doon Public School, Etah",
+      bankName: "State Bank of India",
+      accountNo: "39481020004512",
+      ifsc: "SBIN0004512",
+      razorpayKeyId: "",
+      latestVersionCode: 3,
+      latestVersionName: "1.2",
+      apkDownloadUrl: "https://github.com/school/app/releases/latest/download/DoonPublicSchool-Etah.apk",
+      githubRepoSlug: "school/app",
+      updateNotes: "In-app update rollout",
+      createdAt: ts(),
+      updatedAt: ts(),
+    })
+  );
+  await assertSucceeds(
+    col(aliceDb, "gatewayConfig").doc("gw_main").update({
+      latestVersionCode: 4,
+      latestVersionName: "1.3",
+      apkDownloadUrl: "https://github.com/school/app/releases/latest/download/DoonPublicSchool-Etah.apk",
+      githubRepoSlug: "school/app",
+      updateNotes: "Version 1.3 available",
+      updatedAt: ts(),
+    })
+  );
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  await assertFails(
+    col(bobDb, "gatewayConfig").doc("gw_main").update({
+      latestVersionCode: 99,
+      updatedAt: ts(),
+    })
+  );
 });

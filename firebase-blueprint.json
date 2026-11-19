@@ -67,7 +67,7 @@
     },
     "GatewayConfig": {
       "title": "GatewayConfig",
-      "description": "Official school UPI VPA, bank details, and optional Razorpay Key ID",
+      "description": "Official school UPI VPA, bank details, optional Razorpay Key ID, and cloud-synced in-app APK update metadata",
       "type": "object",
       "properties": {
         "ownerUid": { "type": "string" },
@@ -77,6 +77,11 @@
         "accountNo": { "type": "string" },
         "ifsc": { "type": "string" },
         "razorpayKeyId": { "type": "string" },
+        "latestVersionCode": { "type": "integer" },
+        "latestVersionName": { "type": "string" },
+        "apkDownloadUrl": { "type": "string" },
+        "githubRepoSlug": { "type": "string" },
+        "updateNotes": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

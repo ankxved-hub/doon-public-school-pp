@@ -37,6 +37,7 @@ import com.example.data.preferences.ThemePreferences
 import com.example.data.repository.SchoolRepository
 import com.example.ui.auth.GoogleAuthGateScreen
 import com.example.ui.auth.signOutGoogle
+import com.example.ui.components.AppUpdateBannerCard
 import com.example.ui.components.ProfileEditDialog
 import com.example.ui.screens.AdminScreen
 import com.example.ui.screens.AppCreditsScreen
@@ -48,6 +49,7 @@ import com.example.ui.theme.DpsEtahTheme
 import com.example.ui.theme.GoldAmber
 import com.example.ui.theme.NavyDeep
 import com.example.ui.theme.NavyRoyal
+import com.example.ui.viewmodel.AppUpdateState
 import com.example.ui.viewmodel.DataUiState
 import com.example.ui.viewmodel.SchoolViewModel
 import com.google.firebase.Firebase
@@ -175,6 +177,7 @@ private fun AuthenticatedSchoolShell(
     val aiPersona by viewModel.aiPersona.collectAsStateWithLifecycle()
     val craftAiImageState by viewModel.craftAiImageState.collectAsStateWithLifecycle()
     val generatingCraftPostId by viewModel.generatingCraftPostId.collectAsStateWithLifecycle()
+    val appUpdateState by viewModel.appUpdateState.collectAsStateWithLifecycle()
 
     val users = (usersUi as? DataUiState.Success)?.data ?: emptyList()
     val gateway = (gatewayUi as? DataUiState.Success)?.data?.firstOrNull() ?: GatewayConfig()
@@ -191,6 +194,16 @@ private fun AuthenticatedSchoolShell(
     val craftProjects = (craftProjectsUi as? DataUiState.Success)?.data ?: emptyList()
     val campusPosters = (campusPostersUi as? DataUiState.Success)?.data ?: emptyList()
     val timetables = (timetablesUi as? DataUiState.Success)?.data ?: emptyList()
+
+    var dismissedUpdateCode by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(
+        gateway.latestVersionCode,
+        gateway.latestVersionName,
+        gateway.apkDownloadUrl,
+        gateway.githubRepoSlug,
+    ) {
+        viewModel.checkForAppUpdate(gateway, manual = false)
+    }
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(toastMessage) {
@@ -411,11 +424,21 @@ private fun AuthenticatedSchoolShell(
                     }
                 }
 
-                Box(
+                Column(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight(),
                 ) {
+                    val activeUpdate = appUpdateState as? AppUpdateState.UpdateAvailable
+                    if (activeUpdate != null && dismissedUpdateCode != activeUpdate.latestVersionCode) {
+                        AppUpdateBannerCard(
+                            update = activeUpdate,
+                            onDismiss = { dismissedUpdateCode = activeUpdate.latestVersionCode },
+                            onShowMessage = { viewModel.showMessage(it) },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     when (user.role) {
                         "ADMIN" -> AdminScreen(
                             activeTab = selectedTab,
@@ -445,6 +468,7 @@ private fun AuthenticatedSchoolShell(
                             onPublishCraftProject = { viewModel.publishCraftProject(it) },
                             onGenerateCraftImageForPost = { viewModel.generateAiImageForExistingCraft(it) },
                             onApplaudCraftProject = { viewModel.applaudCraftProject(it) },
+                            onSaveGatewayConfig = { viewModel.saveGatewayConfig(it, "In-app update published live to all phones!") },
                             onNavigateToTab = { selectedTab = it },
                             onShowMessage = { viewModel.showMessage(it) },
                             onOpenProfileEdit = { showProfileEditDialog = true },
@@ -544,6 +568,7 @@ private fun AuthenticatedSchoolShell(
                             onOpenProfileEdit = { showProfileEditDialog = true },
                         )
                     }
+                    }
                 }
             }
         }
@@ -558,6 +583,10 @@ private fun AuthenticatedSchoolShell(
             onSaveProfile = { newFullName, newPhone, newPassword ->
                 viewModel.updateMyProfile(user.id, newFullName, newPhone, newPassword)
             },
+            gateway = gateway,
+            appUpdateState = appUpdateState,
+            onCheckForUpdate = { viewModel.checkForAppUpdate(gateway, manual = true) },
+            onShowMessage = { viewModel.showMessage(it) },
         )
     }
 }

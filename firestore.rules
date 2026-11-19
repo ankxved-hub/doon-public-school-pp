@@ -61,7 +61,12 @@ service cloud.firestore {
              data.bankName is string && data.bankName.size() <= 120 &&
              data.accountNo is string && data.accountNo.size() <= 40 &&
              data.ifsc is string && data.ifsc.size() <= 20 &&
-             data.razorpayKeyId is string && data.razorpayKeyId.size() <= 80;
+             data.razorpayKeyId is string && data.razorpayKeyId.size() <= 80 &&
+             data.get('latestVersionCode', 1) is int && data.get('latestVersionCode', 1) >= 1 &&
+             data.get('latestVersionName', '1.0') is string && data.get('latestVersionName', '1.0').size() <= 30 &&
+             data.get('apkDownloadUrl', '') is string && data.get('apkDownloadUrl', '').size() <= 500 &&
+             data.get('githubRepoSlug', '') is string && data.get('githubRepoSlug', '').size() <= 160 &&
+             data.get('updateNotes', '') is string && data.get('updateNotes', '').size() <= 400;
     }
 
     function isValidCircular(data) {
@@ -447,7 +452,7 @@ service cloud.firestore {
         allow create: if isSignedIn() && isValidId(docId) &&
           incoming().ownerUid == request.auth.uid &&
           incoming().keys().hasAll(['ownerUid', 'merchantUpi', 'payeeName', 'bankName', 'accountNo', 'ifsc', 'razorpayKeyId', 'createdAt', 'updatedAt']) &&
-          incoming().keys().hasOnly(['ownerUid', 'merchantUpi', 'payeeName', 'bankName', 'accountNo', 'ifsc', 'razorpayKeyId', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'merchantUpi', 'payeeName', 'bankName', 'accountNo', 'ifsc', 'razorpayKeyId', 'latestVersionCode', 'latestVersionName', 'apkDownloadUrl', 'githubRepoSlug', 'updateNotes', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
           isValidGatewayConfig(incoming()) &&
           (isBootstrappingBatch() || isAdmin() || isFeeManager());
@@ -456,7 +461,7 @@ service cloud.firestore {
           incoming().ownerUid == existing().ownerUid &&
           isValidTimestampsUpdate() &&
           isValidGatewayConfig(incoming()) &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['merchantUpi', 'payeeName', 'bankName', 'accountNo', 'ifsc', 'razorpayKeyId', 'updatedAt']);
+          incoming().diff(existing()).affectedKeys().hasOnly(['merchantUpi', 'payeeName', 'bankName', 'accountNo', 'ifsc', 'razorpayKeyId', 'latestVersionCode', 'latestVersionName', 'apkDownloadUrl', 'githubRepoSlug', 'updateNotes', 'updatedAt']);
         allow delete: if isValidId(docId) && (isAdmin() || isFeeManager());
       }
 

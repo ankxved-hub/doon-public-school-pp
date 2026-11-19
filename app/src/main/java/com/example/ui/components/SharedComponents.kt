@@ -23,9 +23,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
 import com.example.R
 import com.example.data.model.*
 import com.example.ui.theme.*
+import com.example.ui.viewmodel.AppUpdateState
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -207,10 +209,87 @@ fun StudentDptResultCard(
     }
 }
 
+@Composable
+fun AppUpdateBannerCard(
+    update: AppUpdateState.UpdateAvailable,
+    onDismiss: () -> Unit,
+    onShowMessage: (String) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = NavyDeep),
+        border = BorderStroke(1.5.dp, GoldAmber),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("in_app_update_banner"),
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Surface(color = GoldAmber, shape = RoundedCornerShape(8.dp)) {
+                        Icon(
+                            Icons.Filled.SystemUpdate,
+                            contentDescription = "App Update Available",
+                            tint = NavyDeep,
+                            modifier = Modifier.padding(6.dp).size(18.dp),
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "App Update Available • v${update.latestVersionName}",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = GoldAmber,
+                        )
+                        Text(
+                            text = "Installed: v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE}) → Build ${update.latestVersionCode}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.85f),
+                        )
+                    }
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Filled.Close, contentDescription = "Dismiss update notice", tint = Color.White)
+                }
+            }
+            if (update.releaseNotes.isNotBlank()) {
+                Text(
+                    text = update.releaseNotes,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.9f),
+                )
+            }
+            Button(
+                onClick = { openExternalLink(context, update.downloadUrl, onShowMessage) },
+                colors = ButtonDefaults.buttonColors(containerColor = GoldAmber, contentColor = NavyDeep),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("in_app_update_install_btn"),
+            ) {
+                Icon(Icons.Filled.InstallMobile, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Download & Install Update", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
 /**
  * Profile & Settings Dialog for ALL roles (Admin, Teacher, Fee Manager, Student).
- * Includes Dark Mode preference toggle (persisted locally via DataStore) AND
- * Phone / Password editing (synced to the Firestore 'users' collection).
+ * Includes Dark Mode preference toggle (persisted locally via DataStore),
+ * In-App Update checker & installer, AND Phone / Password editing synced to Firestore.
  */
 @Composable
 fun ProfileEditDialog(
@@ -219,7 +298,12 @@ fun ProfileEditDialog(
     onToggleDarkMode: (Boolean) -> Unit,
     onDismiss: () -> Unit,
     onSaveProfile: (newFullName: String, newPhone: String, newPassword: String) -> Unit,
+    gateway: GatewayConfig = GatewayConfig(),
+    appUpdateState: AppUpdateState = AppUpdateState.Idle,
+    onCheckForUpdate: () -> Unit = {},
+    onShowMessage: (String) -> Unit = {},
 ) {
+    val context = LocalContext.current
     var fullName by remember(user.id, user.fullName) { mutableStateOf(user.fullName) }
     var phone by remember(user.id, user.phone) { mutableStateOf(user.phone) }
     var password by remember(user.id, user.password) { mutableStateOf(user.password) }
@@ -353,6 +437,99 @@ fun ProfileEditDialog(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+
+                // App Version & In-App Update Section
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(Icons.Filled.SystemUpdate, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("App Updates", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+                                Text(
+                                    text = "Installed: v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+
+                        when (appUpdateState) {
+                            is AppUpdateState.Checking -> {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                    Text("Checking for latest release...", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                            is AppUpdateState.UpdateAvailable -> {
+                                Text(
+                                    text = "New version v${appUpdateState.latestVersionName} (Build ${appUpdateState.latestVersionCode}) is ready!",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = EmeraldSuccess,
+                                )
+                                if (appUpdateState.releaseNotes.isNotBlank()) {
+                                    Text(
+                                        text = appUpdateState.releaseNotes,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Button(
+                                    onClick = { openExternalLink(context, appUpdateState.downloadUrl, onShowMessage) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldSuccess, contentColor = Color.White),
+                                    modifier = Modifier.fillMaxWidth().height(48.dp).testTag("dialog_install_update_btn"),
+                                ) {
+                                    Icon(Icons.Filled.InstallMobile, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Download & Install APK")
+                                }
+                            }
+                            is AppUpdateState.UpToDate -> {
+                                Text(
+                                    text = "You are on the latest version (v${appUpdateState.currentVersionName}).",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = EmeraldSuccess,
+                                )
+                            }
+                            is AppUpdateState.Error -> {
+                                Text(
+                                    text = appUpdateState.message,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = RoseError,
+                                )
+                            }
+                            is AppUpdateState.Idle -> {
+                                if (gateway.apkDownloadUrl.isBlank() && gateway.githubRepoSlug.isBlank()) {
+                                    Text(
+                                        text = "Admin can publish APK updates live from the Admin Dashboard.",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+
+                        OutlinedButton(
+                            onClick = onCheckForUpdate,
+                            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("check_app_update_btn"),
+                        ) {
+                            Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Check for App Update")
+                        }
+                    }
+                }
             }
         },
         confirmButton = {

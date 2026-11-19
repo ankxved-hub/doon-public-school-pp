@@ -1,5 +1,5 @@
 {
-  "name": "Doon Public School",
+  "name": "Doon Public School, Etah",
   "description": "Doon Public School, Etah — Official CBSE School ERP for Principal, Teachers, Fee Manager, and Students/Parents featuring Daily Practice Tests (DPT), UPI/Razorpay Fee Billing, Attendance, Timetables, Circulars, and Craft Showcase.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

@@ -273,6 +273,7 @@ fun AppCreditsScreen(
                             "Dev Pratap Singh",
                             "Ankur Kumar Gupta",
                             "Naitik Yadav",
+                            "Advit Pratap",
                         ).forEach { coDev ->
                             Surface(
                                 color = MaterialTheme.colorScheme.surfaceVariant,

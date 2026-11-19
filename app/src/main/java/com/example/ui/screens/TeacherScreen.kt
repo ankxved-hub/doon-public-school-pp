@@ -1357,6 +1357,25 @@ private fun DiaryMarksDoubtsTab(
                             }
                         }
                     }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "Enter marks out of 100 (leave blank to skip electives):",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            onClick = {
+                                subjectsForCls.forEach { termScores[it] = "" }
+                            }
+                        ) {
+                            Text("Clear All")
+                        }
+                    }
                     subjectsForCls.forEach { sub ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1366,7 +1385,7 @@ private fun DiaryMarksDoubtsTab(
                             Text(sub, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                             OutlinedTextField(
                                 value = termScores[sub] ?: "",
-                                onValueChange = { termScores[sub] = it },
+                                onValueChange = { ch -> termScores[sub] = ch.filter { it.isDigit() }.take(3) },
                                 label = { Text("/ 100") },
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -1378,10 +1397,12 @@ private fun DiaryMarksDoubtsTab(
                     Button(
                         onClick = {
                             val st = selectedStudent ?: return@Button
-                            val marksMap = subjectsForCls.associateWith { sub ->
-                                val sc = (termScores[sub]?.toLongOrNull() ?: 0L).coerceIn(0L, 100L)
-                                mapOf("scored" to sc, "max" to 100L)
-                            }
+                            val marksMap = subjectsForCls.mapNotNull { sub ->
+                                val raw = termScores[sub]?.trim().orEmpty()
+                                val sc = raw.toLongOrNull() ?: return@mapNotNull null
+                                sub to mapOf("scored" to sc.coerceIn(0L, 100L), "max" to 100L)
+                            }.toMap()
+                            if (marksMap.isEmpty()) return@Button
                             onPublishTermMarks(
                                 TermMarkCard(
                                     term = termName.trim(),

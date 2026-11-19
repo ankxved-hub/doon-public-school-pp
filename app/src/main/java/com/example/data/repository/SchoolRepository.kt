@@ -15,14 +15,27 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.WriteBatch
 import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import java.security.MessageDigest
 import java.util.Locale
+
+data class GitHubReleaseInfo(
+    val tagName: String,
+    val releaseName: String,
+    val apkDownloadUrl: String,
+    val releasePageUrl: String,
+    val notes: String,
+)
 
 class SchoolRepository(private val db: FirebaseFirestore) {
 
@@ -728,6 +741,15 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         val cleanAccountNo = config.accountNo.trim().take(40)
         val cleanIfsc = config.ifsc.trim().take(20)
         val cleanRazorpay = config.razorpayKeyId.trim().take(80)
+        val cleanVersionCode = config.latestVersionCode.coerceAtLeast(1L)
+        val cleanVersionName = config.latestVersionName.trim().ifBlank { "1.1" }.take(30)
+        val cleanApkUrl = config.apkDownloadUrl.trim().take(500)
+        val cleanRepoSlug = config.githubRepoSlug.trim()
+            .removePrefix("https://github.com/")
+            .removePrefix("http://github.com/")
+            .trim('/')
+            .take(160)
+        val cleanUpdateNotes = config.updateNotes.trim().take(400)
         val gwCol = col("gatewayConfig")
         val existingDoc = gwCol.limit(1).get().await().documents.firstOrNull()
         if (existingDoc == null) {
@@ -742,6 +764,11 @@ class SchoolRepository(private val db: FirebaseFirestore) {
                     accountNo = cleanAccountNo,
                     ifsc = cleanIfsc,
                     razorpayKeyId = cleanRazorpay,
+                    latestVersionCode = cleanVersionCode,
+                    latestVersionName = cleanVersionName,
+                    apkDownloadUrl = cleanApkUrl,
+                    githubRepoSlug = cleanRepoSlug,
+                    updateNotes = cleanUpdateNotes,
                     createdAt = null,
                     updatedAt = null,
                 )
@@ -755,6 +782,11 @@ class SchoolRepository(private val db: FirebaseFirestore) {
                     "accountNo" to cleanAccountNo,
                     "ifsc" to cleanIfsc,
                     "razorpayKeyId" to cleanRazorpay,
+                    "latestVersionCode" to cleanVersionCode,
+                    "latestVersionName" to cleanVersionName,
+                    "apkDownloadUrl" to cleanApkUrl,
+                    "githubRepoSlug" to cleanRepoSlug,
+                    "updateNotes" to cleanUpdateNotes,
                     "updatedAt" to FieldValue.serverTimestamp(),
                 )
             ).await()
@@ -764,6 +796,54 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         if (e is CancellationException) throw e
         handleFirestoreError(e, OperationType.WRITE, "schools/$schoolId/gatewayConfig")
     }
+
+    suspend fun fetchLatestGitHubRelease(repoSlug: String): Result<GitHubReleaseInfo> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val cleanSlug = repoSlug.trim()
+                    .removePrefix("https://github.com/")
+                    .removePrefix("http://github.com/")
+                    .trim('/')
+                require(cleanSlug.contains('/')) { "Enter GitHub repository as owner/repo." }
+                val apiUrl = "https://api.github.com/repos/$cleanSlug/releases/latest"
+                val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 6000
+                    readTimeout = 6000
+                    requestMethod = "GET"
+                    setRequestProperty("Accept", "application/vnd.github+json")
+                    setRequestProperty("User-Agent", "DoonPublicSchoolEtah-Android")
+                }
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    throw IllegalStateException("GitHub returned HTTP $code")
+                }
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                val json = JSONObject(body)
+                val tagName = json.optString("tag_name").trim()
+                val releaseName = json.optString("name").ifBlank { tagName }
+                val htmlUrl = json.optString("html_url").trim()
+                val notes = json.optString("body").trim().take(360)
+                var apkUrl = ""
+                val assets = json.optJSONArray("assets")
+                if (assets != null) {
+                    for (i in 0 until assets.length()) {
+                        val asset = assets.optJSONObject(i) ?: continue
+                        val name = asset.optString("name")
+                        if (name.endsWith(".apk", ignoreCase = true)) {
+                            apkUrl = asset.optString("browser_download_url").trim()
+                            break
+                        }
+                    }
+                }
+                GitHubReleaseInfo(
+                    tagName = tagName,
+                    releaseName = releaseName,
+                    apkDownloadUrl = apkUrl.ifBlank { htmlUrl },
+                    releasePageUrl = htmlUrl,
+                    notes = notes,
+                )
+            }
+        }
 
     // --- Circulars & Targeted Notices ---
 

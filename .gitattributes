@@ -1,0 +1,14 @@
+# Ensure binary Android artifacts, keystores, and assets are never corrupted by text line-ending conversion
+*.apk binary
+*.aab binary
+*.keystore binary
+*.jks binary
+*.base64 -text
+*.jar binary
+*.so binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ttf binary
+*.zip binary

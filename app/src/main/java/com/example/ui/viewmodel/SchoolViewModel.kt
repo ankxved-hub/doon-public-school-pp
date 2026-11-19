@@ -3,6 +3,7 @@ package com.example.ui.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.BuildConfig
 import com.example.data.model.*
 import com.example.data.model.SchoolCatalog.toSlotMap
 import com.example.data.preferences.SavedRoleSession
@@ -67,6 +68,19 @@ sealed interface CraftAiImageState {
     data object Loading : CraftAiImageState
     data class Success(val base64Data: String, val promptUsed: String) : CraftAiImageState
     data class Error(val message: String) : CraftAiImageState
+}
+
+sealed interface AppUpdateState {
+    data object Idle : AppUpdateState
+    data object Checking : AppUpdateState
+    data class UpToDate(val currentVersionName: String, val currentVersionCode: Int) : AppUpdateState
+    data class UpdateAvailable(
+        val latestVersionName: String,
+        val latestVersionCode: Long,
+        val downloadUrl: String,
+        val releaseNotes: String,
+    ) : AppUpdateState
+    data class Error(val message: String) : AppUpdateState
 }
 
 class SchoolViewModel(
@@ -134,6 +148,9 @@ class SchoolViewModel(
 
     private val _likingProjectIds = MutableStateFlow<Set<String>>(emptySet())
     val likingProjectIds: StateFlow<Set<String>> = _likingProjectIds.asStateFlow()
+
+    private val _appUpdateState = MutableStateFlow<AppUpdateState>(AppUpdateState.Idle)
+    val appUpdateState: StateFlow<AppUpdateState> = _appUpdateState.asStateFlow()
 
     private sealed interface SessionRestoreState {
         data object Checking : SessionRestoreState
@@ -542,12 +559,90 @@ class SchoolViewModel(
         }
     }
 
-    // --- Fee Manager Actions ---
-    fun saveGatewayConfig(config: GatewayConfig) {
+    // --- Fee Manager & App Update Actions ---
+    fun saveGatewayConfig(config: GatewayConfig, successToast: String = "School configuration saved live!") {
         viewModelScope.launch {
             repository.saveGatewayConfig(config)
-                .onSuccess { _toastMessage.value = "Merchant UPI & Payment Gateway saved live!" }
-                .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to save gateway config." }
+                .onSuccess { _toastMessage.value = successToast }
+                .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to save configuration." }
+        }
+    }
+
+    private fun parseNormalizedVersion(raw: String): List<Int> {
+        val cleaned = raw.trim().removePrefix("v").removePrefix("V")
+        return Regex("\\d+").findAll(cleaned).map { it.value.toIntOrNull() ?: 0 }.toList()
+    }
+
+    private fun isRemoteVersionNewer(remoteTag: String, currentName: String): Boolean {
+        val remoteParts = parseNormalizedVersion(remoteTag)
+        val currentParts = parseNormalizedVersion(currentName)
+        if (remoteParts.isEmpty()) return false
+        val maxLen = maxOf(remoteParts.size, currentParts.size)
+        for (i in 0 until maxLen) {
+            val r = remoteParts.getOrElse(i) { 0 }
+            val c = currentParts.getOrElse(i) { 0 }
+            if (r > c) return true
+            if (r < c) return false
+        }
+        return false
+    }
+
+    fun checkForAppUpdate(gateway: GatewayConfig, manual: Boolean = true) {
+        val installedCode = BuildConfig.VERSION_CODE.toLong()
+        val installedName = BuildConfig.VERSION_NAME
+        val cloudHasNewerCode = gateway.latestVersionCode > installedCode
+        val cloudHasNewerName = isRemoteVersionNewer(gateway.latestVersionName, installedName)
+        val cloudDirectUrl = gateway.apkDownloadUrl.trim().ifBlank {
+            val slug = gateway.githubRepoSlug.trim()
+                .removePrefix("https://github.com/")
+                .removePrefix("http://github.com/")
+                .trim('/')
+            if (slug.contains('/')) "https://github.com/$slug/releases/latest/download/DoonPublicSchool-Etah.apk" else ""
+        }
+
+        if ((cloudHasNewerCode || cloudHasNewerName) && cloudDirectUrl.isNotBlank()) {
+            _appUpdateState.value = AppUpdateState.UpdateAvailable(
+                latestVersionName = gateway.latestVersionName.ifBlank { "Latest" },
+                latestVersionCode = maxOf(gateway.latestVersionCode, installedCode + 1L),
+                downloadUrl = cloudDirectUrl,
+                releaseNotes = gateway.updateNotes.ifBlank { "New features, performance & bug fixes for Doon Public School, Etah." },
+            )
+            return
+        }
+
+        val repoSlug = gateway.githubRepoSlug.trim()
+        if (repoSlug.isBlank()) {
+            if (manual) {
+                _appUpdateState.value = AppUpdateState.UpToDate(installedName, BuildConfig.VERSION_CODE)
+            } else {
+                _appUpdateState.value = AppUpdateState.Idle
+            }
+            return
+        }
+
+        viewModelScope.launch {
+            if (manual) {
+                _appUpdateState.value = AppUpdateState.Checking
+            }
+            repository.fetchLatestGitHubRelease(repoSlug)
+                .onSuccess { rel ->
+                    val newer = isRemoteVersionNewer(rel.tagName, installedName)
+                    if (newer && rel.apkDownloadUrl.isNotBlank()) {
+                        _appUpdateState.value = AppUpdateState.UpdateAvailable(
+                            latestVersionName = rel.tagName.ifBlank { rel.releaseName },
+                            latestVersionCode = maxOf(gateway.latestVersionCode, installedCode + 1L),
+                            downloadUrl = rel.apkDownloadUrl,
+                            releaseNotes = rel.notes.ifBlank { gateway.updateNotes.ifBlank { "Latest verified APK release available." } },
+                        )
+                    } else if (manual) {
+                        _appUpdateState.value = AppUpdateState.UpToDate(installedName, BuildConfig.VERSION_CODE)
+                    }
+                }
+                .onFailure { e ->
+                    if (manual) {
+                        _appUpdateState.value = AppUpdateState.Error(e.localizedMessage ?: "Unable to check for updates right now.")
+                    }
+                }
         }
     }
 
