@@ -1,0 +1,22 @@
+name = "doon-public-school-etah"
+main = "src/index.js"
+compatibility_date = "2026-03-01"
+workers_dev = true
+
+[assets]
+directory = "../web-portal"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# 1. Run: npx wrangler d1 create doon-school-db
+# 2. Replace the database_id below with the ID printed by Wrangler.
+[[d1_databases]]
+binding = "DB"
+database_name = "doon-school-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[vars]
+SCHOOL_ID = "dps_etah"
+SCHOOL_NAME = "Doon Public School, Etah"
+# Comma-separated browser origins allowed to call /api/* when hosting web-portal separately (e.g. Cloudflare Pages):
+ALLOWED_ORIGINS = ""

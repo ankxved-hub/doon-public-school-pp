@@ -1,0 +1,17 @@
+{
+  "name": "doon-public-school-cloudflare",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Workers + D1 + Assets backend and web portal for Doon Public School, Etah",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init:local": "wrangler d1 execute doon-school-db --local --file=./schema.sql",
+    "db:init:remote": "wrangler d1 execute doon-school-db --remote --file=./schema.sql",
+    "test": "node --test tests/worker.test.js"
+  },
+  "devDependencies": {
+    "wrangler": "^3.99.0"
+  }
+}

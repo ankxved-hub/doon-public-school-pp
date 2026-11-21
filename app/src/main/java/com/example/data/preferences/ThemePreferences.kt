@@ -19,6 +19,7 @@ data class SavedRoleSession(
     val docId: String,
     val userId: String,
     val role: String,
+    val cloudflareToken: String = "",
 )
 
 class ThemePreferences(context: Context) {
@@ -40,19 +41,37 @@ class ThemePreferences(context: Context) {
             val userId = prefs[KEY_SESSION_USER_ID].orEmpty()
             val role = prefs[KEY_SESSION_ROLE].orEmpty()
             val docId = prefs[KEY_SESSION_DOC_ID].orEmpty()
+            val cfToken = prefs[KEY_CF_TOKEN].orEmpty()
             if (owner == expectedOwnerUid && userId.isNotBlank() && role.isNotBlank()) {
-                SavedRoleSession(ownerUid = owner, docId = docId, userId = userId, role = role)
+                SavedRoleSession(
+                    ownerUid = owner,
+                    docId = docId,
+                    userId = userId,
+                    role = role,
+                    cloudflareToken = cfToken,
+                )
             } else {
                 null
             }
         }
 
-    suspend fun saveRoleSession(ownerUid: String, docId: String, userId: String, role: String) {
+    suspend fun saveRoleSession(
+        ownerUid: String,
+        docId: String,
+        userId: String,
+        role: String,
+        cloudflareToken: String = "",
+    ) {
         appContext.dpsThemeDataStore.edit { prefs ->
             prefs[KEY_SESSION_OWNER_UID] = ownerUid
             prefs[KEY_SESSION_DOC_ID] = docId
             prefs[KEY_SESSION_USER_ID] = userId
             prefs[KEY_SESSION_ROLE] = role
+            if (cloudflareToken.isNotBlank()) {
+                prefs[KEY_CF_TOKEN] = cloudflareToken
+            } else {
+                prefs.remove(KEY_CF_TOKEN)
+            }
         }
     }
 
@@ -62,6 +81,7 @@ class ThemePreferences(context: Context) {
             prefs.remove(KEY_SESSION_DOC_ID)
             prefs.remove(KEY_SESSION_USER_ID)
             prefs.remove(KEY_SESSION_ROLE)
+            prefs.remove(KEY_CF_TOKEN)
         }
     }
 
@@ -71,5 +91,6 @@ class ThemePreferences(context: Context) {
         val KEY_SESSION_DOC_ID = stringPreferencesKey("saved_session_doc_id")
         val KEY_SESSION_USER_ID = stringPreferencesKey("saved_session_user_id")
         val KEY_SESSION_ROLE = stringPreferencesKey("saved_session_role")
+        val KEY_CF_TOKEN = stringPreferencesKey("saved_cloudflare_token")
     }
 }

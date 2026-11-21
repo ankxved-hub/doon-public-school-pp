@@ -41,6 +41,9 @@ fun SchoolRoleLoginScreen(
     onRetrySync: () -> Unit = {},
     onLoginRole: suspend (role: String, userId: String, password: String) -> String?,
     onGoogleSignOut: () -> Unit,
+    isCloudflareMode: Boolean = false,
+    needsCloudflareAdminSetup: Boolean = false,
+    onClaimCloudflareAdmin: suspend (fullName: String, userId: String, phone: String, password: String) -> String? = { _, _, _, _ -> null },
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -50,6 +53,11 @@ fun SchoolRoleLoginScreen(
     var showPassword by remember { mutableStateOf(false) }
     var isSubmitting by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    var adminName by remember { mutableStateOf("Dr. Principal (Admin)") }
+    var adminId by remember { mutableStateOf("ADMIN01") }
+    var adminPhone by remember { mutableStateOf("") }
+    var adminPassword by remember { mutableStateOf("") }
 
     LaunchedEffect(isSyncError) {
         if (!isSyncError && errorMsg?.startsWith("Refreshing") == true) {
@@ -130,7 +138,11 @@ fun SchoolRoleLoginScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text("School ERP Role Login", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                             Text(
-                                text = "Cloud Synced: ${googleEmail ?: "Google Account"}",
+                                text = if (isCloudflareMode) {
+                                    "Cloudflare Edge Synced (Website + App Live)"
+                                } else {
+                                    "Cloud Synced: ${googleEmail ?: "Google Account"}"
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = EmeraldSuccess,
                             )
@@ -146,8 +158,79 @@ fun SchoolRoleLoginScreen(
                                     tint = MaterialTheme.colorScheme.primary,
                                 )
                             }
-                            TextButton(onClick = onGoogleSignOut) {
-                                Text("Switch Google", style = MaterialTheme.typography.labelSmall)
+                            if (!isCloudflareMode) {
+                                TextButton(onClick = onGoogleSignOut) {
+                                    Text("Switch Google", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
+
+                    if (isCloudflareMode && needsCloudflareAdminSetup) {
+                        Surface(
+                            color = GoldSoft,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    text = "FIRST-RUN CLOUDFLARE SETUP (PRINCIPAL / ADMIN)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = NavyDeep,
+                                )
+                                Text(
+                                    text = "Create the first Principal Admin account once to unlock student & teacher creation across App and Website.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = NavyDeep,
+                                )
+                                OutlinedTextField(
+                                    value = adminName,
+                                    onValueChange = { adminName = it },
+                                    label = { Text("Principal / Admin Name") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                OutlinedTextField(
+                                    value = adminId,
+                                    onValueChange = { adminId = it },
+                                    label = { Text("Admin ID (e.g. ADMIN01)") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                OutlinedTextField(
+                                    value = adminPhone,
+                                    onValueChange = { adminPhone = it },
+                                    label = { Text("Phone Number") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                OutlinedTextField(
+                                    value = adminPassword,
+                                    onValueChange = { adminPassword = it },
+                                    label = { Text("Strong Admin Password (min 6 chars)") },
+                                    singleLine = true,
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                Button(
+                                    onClick = {
+                                        if (!isSubmitting) {
+                                            scope.launch {
+                                                isSubmitting = true
+                                                errorMsg = onClaimCloudflareAdmin(adminName, adminId, adminPhone, adminPassword)
+                                                isSubmitting = false
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text("Activate Principal Admin Account", fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }

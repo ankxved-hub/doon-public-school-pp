@@ -34,6 +34,7 @@ import com.example.ai.configureAppCheck
 import com.example.data.model.GatewayConfig
 import com.example.data.model.SchoolInfo
 import com.example.data.preferences.ThemePreferences
+import com.example.data.remote.CloudflareApiClient
 import com.example.data.repository.SchoolRepository
 import com.example.ui.auth.GoogleAuthGateScreen
 import com.example.ui.auth.signOutGoogle
@@ -107,10 +108,11 @@ private fun DpsEtahAppRoot(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val useCloudflare = remember { CloudflareApiClient.isEnabled() }
     val credentialManager = remember(context) { CredentialManager.create(context) }
     val currentUser by authStateFlow().collectAsStateWithLifecycle(initialValue = Firebase.auth.currentUser)
 
-    val uid = currentUser?.uid
+    val uid = if (useCloudflare) "cloudflare_edge" else currentUser?.uid
     if (uid == null) {
         GoogleAuthGateScreen(onAuthSuccess = {})
         return
@@ -130,12 +132,16 @@ private fun DpsEtahAppRoot(
 
         AuthenticatedSchoolShell(
             viewModel = viewModel,
-            googleEmail = currentUser?.email,
+            googleEmail = if (useCloudflare) null else currentUser?.email,
             isDarkMode = isDarkMode,
             onToggleDarkMode = onToggleDarkMode,
             onGoogleSignOut = {
                 scope.launch { themePrefs.clearRoleSession() }
-                signOutGoogle(credentialManager, scope) {}
+                if (!useCloudflare) {
+                    signOutGoogle(credentialManager, scope) {}
+                } else {
+                    viewModel.logoutSchoolRole()
+                }
             },
         )
     }
@@ -153,6 +159,7 @@ private fun AuthenticatedSchoolShell(
     val activeUser by viewModel.activeSchoolUser.collectAsStateWithLifecycle()
     val isRestoringSavedSession by viewModel.isRestoringSavedSession.collectAsStateWithLifecycle()
     val isSeeding by viewModel.isSeeding.collectAsStateWithLifecycle()
+    val needsCloudflareAdminSetup by viewModel.needsCloudflareAdminSetup.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
 
     val usersUi by viewModel.usersState.collectAsStateWithLifecycle()
@@ -252,6 +259,9 @@ private fun AuthenticatedSchoolShell(
                 onRetrySync = { viewModel.retryCloudSync(userInitiated = true) },
                 onLoginRole = { role, userId, password -> viewModel.loginSchoolRole(role, userId, password) },
                 onGoogleSignOut = onGoogleSignOut,
+                isCloudflareMode = viewModel.isCloudflareMode,
+                needsCloudflareAdminSetup = needsCloudflareAdminSetup,
+                onClaimCloudflareAdmin = { fn, uidVal, ph, pw -> viewModel.claimCloudflareAdmin(fn, uidVal, ph, pw) },
             )
         }
         return
@@ -345,6 +355,14 @@ private fun AuthenticatedSchoolShell(
                         }
                     },
                     actions = {
+                        if (viewModel.isCloudflareMode) {
+                            IconButton(
+                                onClick = { viewModel.retryCloudSync(userInitiated = true) },
+                                modifier = Modifier.testTag("topbar_sync_btn"),
+                            ) {
+                                Icon(Icons.Filled.Sync, contentDescription = "Sync Cloudflare Cloud")
+                            }
+                        }
                         IconButton(
                             onClick = { onToggleDarkMode(!isDarkMode) },
                             modifier = Modifier.testTag("topbar_dark_mode_btn"),
@@ -366,11 +384,13 @@ private fun AuthenticatedSchoolShell(
                         ) {
                             Icon(Icons.Filled.SwitchAccount, contentDescription = "Switch School Role")
                         }
-                        IconButton(
-                            onClick = onGoogleSignOut,
-                            modifier = Modifier.testTag("topbar_google_signout_btn"),
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Google Sign-Out")
+                        if (!viewModel.isCloudflareMode) {
+                            IconButton(
+                                onClick = onGoogleSignOut,
+                                modifier = Modifier.testTag("topbar_google_signout_btn"),
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Google Sign-Out")
+                            }
                         }
                     },
                 )

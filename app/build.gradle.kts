@@ -21,6 +21,17 @@ android {
     versionName = "1.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    val envFile = project.rootProject.file(".env")
+    val envUrl = if (envFile.exists()) {
+      envFile.readLines()
+        .firstOrNull { it.trim().startsWith("CLOUDFLARE_API_URL=") }
+        ?.substringAfter("=")?.trim()?.trim('"', '\'')
+    } else null
+    val cfUrl = (System.getenv("CLOUDFLARE_API_URL") ?: envUrl ?: "").trim()
+      .replace("\\", "\\\\")
+      .replace("\"", "\\\"")
+    buildConfigField("String", "CLOUDFLARE_API_URL", "\"$cfUrl\"")
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -77,6 +88,7 @@ secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
   ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
+  ignoreList.add("CLOUDFLARE_API_URL")
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }

@@ -8,6 +8,8 @@ import com.example.data.model.*
 import com.example.data.model.SchoolCatalog.toSlotMap
 import com.example.data.preferences.SavedRoleSession
 import com.example.data.preferences.ThemePreferences
+import com.example.data.remote.CloudflareApiClient
+import com.example.data.remote.CloudflareDashboardData
 import com.example.data.repository.SchoolRepository
 import com.example.ui.components.encodeBitmapToBase64
 import com.google.firebase.Firebase
@@ -89,56 +91,78 @@ class SchoolViewModel(
     private val sessionPrefs: ThemePreferences,
 ) : ViewModel() {
 
+    val isCloudflareMode: Boolean = CloudflareApiClient.isEnabled()
+
     private val _syncGeneration = MutableStateFlow(0)
     private val _isMemberReady = MutableStateFlow(false)
     val isMemberReady: StateFlow<Boolean> = _isMemberReady.asStateFlow()
     private var autoRetryCount = 0
 
+    private val _cfToken = MutableStateFlow<String?>(null)
+    private val _cfDashboard = MutableStateFlow<CloudflareDashboardData?>(null)
+    private val _needsCloudflareAdminSetup = MutableStateFlow(false)
+    val needsCloudflareAdminSetup: StateFlow<Boolean> = _needsCloudflareAdminSetup.asStateFlow()
+
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun <T> observeStateFlow(
         label: String,
+        cfSelector: (CloudflareDashboardData) -> List<T>,
         flowProvider: () -> Flow<List<T>>,
     ): StateFlow<DataUiState<List<T>>> =
-        combine(_isMemberReady, _syncGeneration) { ready, gen -> ready to gen }
-            .flatMapLatest { (ready, _) ->
-                if (!ready) {
-                    flowOf<DataUiState<List<T>>>(DataUiState.Success(emptyList()))
+        if (isCloudflareMode) {
+            combine(_isMemberReady, _cfDashboard) { ready, dash ->
+                if (!ready || dash == null) {
+                    DataUiState.Success(emptyList())
                 } else {
-                    flowProvider()
-                        .map<List<T>, DataUiState<List<T>>> { DataUiState.Success(it) }
-                        .catch { error ->
-                            val firestoreError = generateSequence(error) { it.cause }
-                                .filterIsInstance<FirebaseFirestoreException>()
-                                .firstOrNull()
-                            if (firestoreError == null && error is CancellationException) throw error
-                            val rootError = firestoreError ?: error
-                            Log.w(TAG, "Error observing $label", rootError)
-                            emit(DataUiState.Error(rootError.message ?: "Unable to connect to $label"))
-                        }
+                    DataUiState.Success(cfSelector(dash))
                 }
-            }
-            .stateIn(
+            }.stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
                 initialValue = DataUiState.Loading,
             )
+        } else {
+            combine(_isMemberReady, _syncGeneration) { ready, gen -> ready to gen }
+                .flatMapLatest { (ready, _) ->
+                    if (!ready) {
+                        flowOf<DataUiState<List<T>>>(DataUiState.Success(emptyList()))
+                    } else {
+                        flowProvider()
+                            .map<List<T>, DataUiState<List<T>>> { DataUiState.Success(it) }
+                            .catch { error ->
+                                val firestoreError = generateSequence(error) { it.cause }
+                                    .filterIsInstance<FirebaseFirestoreException>()
+                                    .firstOrNull()
+                                if (firestoreError == null && error is CancellationException) throw error
+                                val rootError = firestoreError ?: error
+                                Log.w(TAG, "Error observing $label", rootError)
+                                emit(DataUiState.Error(rootError.message ?: "Unable to connect to $label"))
+                            }
+                    }
+                }
+                .stateIn(
+                    scope = viewModelScope,
+                    started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+                    initialValue = DataUiState.Loading,
+                )
+        }
 
-    val usersState: StateFlow<DataUiState<List<SchoolUser>>> = observeStateFlow("users") { repository.observeUsers() }
-    val gatewayState: StateFlow<DataUiState<List<GatewayConfig>>> = observeStateFlow("gatewayConfig") { repository.observeGatewayConfig() }
-    val circularsState: StateFlow<DataUiState<List<Circular>>> = observeStateFlow("circulars") { repository.observeCirculars() }
-    val dptDailyState: StateFlow<DataUiState<List<DptDaily>>> = observeStateFlow("dptDaily") { repository.observeDptDaily() }
-    val dptWeeklyState: StateFlow<DataUiState<List<DptWeekly>>> = observeStateFlow("dptWeekly") { repository.observeDptWeekly() }
-    val attendanceState: StateFlow<DataUiState<List<AttendanceRecord>>> = observeStateFlow("attendance") { repository.observeAttendance() }
-    val leavesState: StateFlow<DataUiState<List<LeaveRequest>>> = observeStateFlow("leaves") { repository.observeLeaves() }
-    val homeworkState: StateFlow<DataUiState<List<HomeworkItem>>> = observeStateFlow("homework") { repository.observeHomework() }
-    val termMarksState: StateFlow<DataUiState<List<TermMarkCard>>> = observeStateFlow("termMarks") { repository.observeTermMarks() }
-    val feeItemsState: StateFlow<DataUiState<List<FeeItem>>> = observeStateFlow("feeItems") { repository.observeFeeItems() }
-    val paymentsState: StateFlow<DataUiState<List<FeePayment>>> = observeStateFlow("payments") { repository.observePayments() }
-    val doubtsState: StateFlow<DataUiState<List<DoubtMessage>>> = observeStateFlow("doubts") { repository.observeDoubts() }
-    val craftProjectsState: StateFlow<DataUiState<List<CraftProject>>> = observeStateFlow("craftProjects") { repository.observeCraftProjects() }
-    val craftLikesState: StateFlow<DataUiState<List<CraftLike>>> = observeStateFlow("craftLikes") { repository.observeCraftLikes() }
-    val campusPostersState: StateFlow<DataUiState<List<CampusPoster>>> = observeStateFlow("campusPosters") { repository.observeCampusPosters() }
-    val timetablesState: StateFlow<DataUiState<List<ClassTimetable>>> = observeStateFlow("timetables") { repository.observeTimetables() }
+    val usersState: StateFlow<DataUiState<List<SchoolUser>>> = observeStateFlow("users", { it.users }) { repository.observeUsers() }
+    val gatewayState: StateFlow<DataUiState<List<GatewayConfig>>> = observeStateFlow("gatewayConfig", { listOf(it.gateway) }) { repository.observeGatewayConfig() }
+    val circularsState: StateFlow<DataUiState<List<Circular>>> = observeStateFlow("circulars", { it.circulars }) { repository.observeCirculars() }
+    val dptDailyState: StateFlow<DataUiState<List<DptDaily>>> = observeStateFlow("dptDaily", { it.dptDaily }) { repository.observeDptDaily() }
+    val dptWeeklyState: StateFlow<DataUiState<List<DptWeekly>>> = observeStateFlow("dptWeekly", { it.dptWeekly }) { repository.observeDptWeekly() }
+    val attendanceState: StateFlow<DataUiState<List<AttendanceRecord>>> = observeStateFlow("attendance", { it.attendance }) { repository.observeAttendance() }
+    val leavesState: StateFlow<DataUiState<List<LeaveRequest>>> = observeStateFlow("leaves", { it.leaves }) { repository.observeLeaves() }
+    val homeworkState: StateFlow<DataUiState<List<HomeworkItem>>> = observeStateFlow("homework", { it.homework }) { repository.observeHomework() }
+    val termMarksState: StateFlow<DataUiState<List<TermMarkCard>>> = observeStateFlow("termMarks", { it.termMarks }) { repository.observeTermMarks() }
+    val feeItemsState: StateFlow<DataUiState<List<FeeItem>>> = observeStateFlow("feeItems", { it.feeItems }) { repository.observeFeeItems() }
+    val paymentsState: StateFlow<DataUiState<List<FeePayment>>> = observeStateFlow("payments", { it.payments }) { repository.observePayments() }
+    val doubtsState: StateFlow<DataUiState<List<DoubtMessage>>> = observeStateFlow("doubts", { it.doubts }) { repository.observeDoubts() }
+    val craftProjectsState: StateFlow<DataUiState<List<CraftProject>>> = observeStateFlow("craftProjects", { it.craftProjects }) { repository.observeCraftProjects() }
+    val craftLikesState: StateFlow<DataUiState<List<CraftLike>>> = observeStateFlow("craftLikes", { it.craftLikes }) { repository.observeCraftLikes() }
+    val campusPostersState: StateFlow<DataUiState<List<CampusPoster>>> = observeStateFlow("campusPosters", { it.campusPosters }) { repository.observeCampusPosters() }
+    val timetablesState: StateFlow<DataUiState<List<ClassTimetable>>> = observeStateFlow("timetables", { it.timetables }) { repository.observeTimetables() }
 
     private val _toastMessage = MutableStateFlow<String?>(null)
     val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
@@ -164,29 +188,39 @@ class SchoolViewModel(
 
     private val _activeSchoolUserDocId = MutableStateFlow<String?>(null)
     val activeSchoolUser: StateFlow<SchoolUser?> =
-        combine(_activeSchoolUserDocId, sessionRestoreState, usersState, _isMemberReady) { manualDocId, restoreState, usersUi, memberReady ->
-            if (!memberReady) return@combine null
-            val list = (usersUi as? DataUiState.Success)?.data ?: return@combine null
-            if (manualDocId != null) {
-                list.firstOrNull { it.id == manualDocId }
-            } else if (restoreState is SessionRestoreState.Ready && restoreState.session != null) {
-                val persisted = restoreState.session
-                list.firstOrNull { persisted.docId.isNotBlank() && it.id == persisted.docId }
-                    ?: list.firstOrNull {
-                        it.role == persisted.role &&
-                            it.userId.trim().equals(persisted.userId.trim(), ignoreCase = true)
-                    }
-            } else {
-                null
-            }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), null)
+        if (isCloudflareMode) {
+            combine(_cfDashboard, _isMemberReady) { dash, ready ->
+                if (!ready) null else dash?.currentUser
+            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), null)
+        } else {
+            combine(_activeSchoolUserDocId, sessionRestoreState, usersState, _isMemberReady) { manualDocId, restoreState, usersUi, memberReady ->
+                if (!memberReady) return@combine null
+                val list = (usersUi as? DataUiState.Success)?.data ?: return@combine null
+                if (manualDocId != null) {
+                    list.firstOrNull { it.id == manualDocId }
+                } else if (restoreState is SessionRestoreState.Ready && restoreState.session != null) {
+                    val persisted = restoreState.session
+                    list.firstOrNull { persisted.docId.isNotBlank() && it.id == persisted.docId }
+                        ?: list.firstOrNull {
+                            it.role == persisted.role &&
+                                it.userId.trim().equals(persisted.userId.trim(), ignoreCase = true)
+                        }
+                } else {
+                    null
+                }
+            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), null)
+        }
 
     val isRestoringSavedSession: StateFlow<Boolean> =
         combine(sessionRestoreState, usersState, _isSeeding, _isMemberReady) { restoreState, usersUi, seeding, memberReady ->
-            when (restoreState) {
-                is SessionRestoreState.Checking -> true
-                is SessionRestoreState.Ready ->
-                    restoreState.session != null && (seeding || (memberReady && usersUi is DataUiState.Loading))
+            if (isCloudflareMode) {
+                seeding && restoreState is SessionRestoreState.Ready && restoreState.session?.cloudflareToken?.isNotBlank() == true
+            } else {
+                when (restoreState) {
+                    is SessionRestoreState.Checking -> true
+                    is SessionRestoreState.Ready ->
+                        restoreState.session != null && (seeding || (memberReady && usersUi is DataUiState.Loading))
+                }
             }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
@@ -243,9 +277,41 @@ class SchoolViewModel(
     private val _generatingCraftPostId = MutableStateFlow<String?>(null)
     val generatingCraftPostId: StateFlow<String?> = _generatingCraftPostId.asStateFlow()
 
+    private suspend fun refreshCloudflareDashboard(tokenOverride: String? = null): Result<CloudflareDashboardData> {
+        val tok = tokenOverride ?: _cfToken.value
+        if (tok.isNullOrBlank()) return Result.failure(IllegalStateException("Not signed in"))
+        val res = CloudflareApiClient.fetchDashboard(tok)
+        res.onSuccess { dash -> _cfDashboard.value = dash }
+        return res
+    }
+
     init {
         viewModelScope.launch {
             _isSeeding.value = true
+            if (isCloudflareMode) {
+                CloudflareApiClient.getBootstrapStatus()
+                    .onSuccess { needsSetup -> _needsCloudflareAdminSetup.value = needsSetup }
+                    .onFailure { e -> Log.w(TAG, "Cloudflare bootstrap check failed", e) }
+
+                val saved = sessionPrefs.savedRoleSession(ownerUid).first()
+                if (saved != null && saved.cloudflareToken.isNotBlank()) {
+                    _cfToken.value = saved.cloudflareToken
+                    val dashRes = refreshCloudflareDashboard(saved.cloudflareToken)
+                    if (dashRes.isSuccess) {
+                        _activeSchoolUserDocId.value = dashRes.getOrThrow().currentUser.id
+                        _isMemberReady.value = true
+                    } else {
+                        _cfToken.value = null
+                        _isMemberReady.value = false
+                        sessionPrefs.clearRoleSession()
+                    }
+                } else {
+                    _isMemberReady.value = false
+                }
+                _isSeeding.value = false
+                return@launch
+            }
+
             try {
                 Firebase.auth.currentUser?.getIdToken(true)?.await()
             } catch (_: Exception) {
@@ -275,15 +341,17 @@ class SchoolViewModel(
             _isSeeding.value = false
         }
 
-        // Automatically recover if any transient auth/network error occurs while active member
-        viewModelScope.launch {
-            usersState.collect { state ->
-                if (_isMemberReady.value && state is DataUiState.Error && autoRetryCount < 2) {
-                    autoRetryCount += 1
-                    delay(1200L * autoRetryCount)
-                    retryCloudSync(userInitiated = false)
-                } else if (state is DataUiState.Success) {
-                    autoRetryCount = 0
+        // Automatically recover if any transient auth/network error occurs while active member (Firestore mode)
+        if (!isCloudflareMode) {
+            viewModelScope.launch {
+                usersState.collect { state ->
+                    if (_isMemberReady.value && state is DataUiState.Error && autoRetryCount < 2) {
+                        autoRetryCount += 1
+                        delay(1200L * autoRetryCount)
+                        retryCloudSync(userInitiated = false)
+                    } else if (state is DataUiState.Success) {
+                        autoRetryCount = 0
+                    }
                 }
             }
         }
@@ -292,6 +360,29 @@ class SchoolViewModel(
     fun retryCloudSync(userInitiated: Boolean = true) {
         viewModelScope.launch {
             _isSeeding.value = true
+            if (isCloudflareMode) {
+                val bootRes = CloudflareApiClient.getBootstrapStatus()
+                    .onSuccess { _needsCloudflareAdminSetup.value = it }
+                val tok = _cfToken.value
+                if (!tok.isNullOrBlank()) {
+                    val dashRes = refreshCloudflareDashboard(tok)
+                    _isSeeding.value = false
+                    if (userInitiated) {
+                        dashRes
+                            .onSuccess { _toastMessage.value = "Synced with Doon Public School Cloudflare Edge!" }
+                            .onFailure { _toastMessage.value = it.localizedMessage ?: "Unable to sync with Cloudflare." }
+                    }
+                } else {
+                    _isSeeding.value = false
+                    if (userInitiated) {
+                        bootRes
+                            .onSuccess { _toastMessage.value = "Connected to Doon Public School Cloudflare server." }
+                            .onFailure { _toastMessage.value = "Please check your internet connection and tap Reconnect." }
+                    }
+                }
+                return@launch
+            }
+
             try {
                 Firebase.auth.currentUser?.getIdToken(true)?.await()
             } catch (_: Exception) {
@@ -317,12 +408,68 @@ class SchoolViewModel(
         _toastMessage.value = msg
     }
 
+    suspend fun claimCloudflareAdmin(
+        fullName: String,
+        userId: String,
+        phone: String,
+        password: String,
+    ): String? {
+        if (!isCloudflareMode) return "Cloudflare backend is not enabled."
+        val cleanPw = password.trim()
+        if (cleanPw.length < 6) return "Principal password must be at least 6 characters."
+        val res = CloudflareApiClient.claimAdmin(fullName, userId, phone, cleanPw)
+        return res.fold(
+            onSuccess = { session ->
+                _cfToken.value = session.token
+                _needsCloudflareAdminSetup.value = false
+                refreshCloudflareDashboard(session.token)
+                _activeSchoolUserDocId.value = session.user.id
+                sessionPrefs.saveRoleSession(
+                    ownerUid = ownerUid,
+                    docId = session.user.id,
+                    userId = session.user.userId.trim(),
+                    role = session.user.role,
+                    cloudflareToken = session.token,
+                )
+                _isMemberReady.value = true
+                null
+            },
+            onFailure = { it.localizedMessage ?: "Admin setup failed." },
+        )
+    }
+
     suspend fun loginSchoolRole(role: String, userId: String, password: String): String? {
         val cleanId = userId.trim()
         val cleanPw = password.trim()
         if (cleanId.isEmpty() || cleanPw.isEmpty()) {
             return "Please enter both your ID (e.g. Roll / Admission No) and Password."
         }
+        if (isCloudflareMode) {
+            val res = CloudflareApiClient.login(role, cleanId, cleanPw)
+            return res.fold(
+                onSuccess = { session ->
+                    _cfToken.value = session.token
+                    val dashRes = refreshCloudflareDashboard(session.token)
+                    if (dashRes.isFailure) {
+                        return dashRes.exceptionOrNull()?.localizedMessage ?: "Signed in, but failed to load dashboard."
+                    }
+                    _activeSchoolUserDocId.value = session.user.id
+                    sessionPrefs.saveRoleSession(
+                        ownerUid = ownerUid,
+                        docId = session.user.id,
+                        userId = session.user.userId.trim(),
+                        role = session.user.role,
+                        cloudflareToken = session.token,
+                    )
+                    _isMemberReady.value = true
+                    null
+                },
+                onFailure = { error ->
+                    error.localizedMessage ?: "Invalid ID or password for ${role.replace('_', ' ')}."
+                },
+            )
+        }
+
         val result = repository.loginWithCredentials(role, cleanId, cleanPw)
         return result.fold(
             onSuccess = { matchedUser ->
@@ -347,14 +494,35 @@ class SchoolViewModel(
     fun logoutSchoolRole() {
         _activeSchoolUserDocId.value = null
         _isMemberReady.value = false
+        _cfToken.value = null
+        _cfDashboard.value = null
         viewModelScope.launch {
             sessionPrefs.clearRoleSession()
-            repository.clearCurrentMemberSession()
+            if (!isCloudflareMode) {
+                repository.clearCurrentMemberSession()
+            }
         }
     }
 
     // --- Profile Editing for ALL Roles (Admin, Teacher, Fee Manager, Student) ---
     fun updateMyProfile(userDocId: String, newFullName: String, newPhone: String, newPassword: String) {
+        if (isCloudflareMode) {
+            if (newFullName.isBlank() || newPhone.isBlank()) {
+                _toastMessage.value = "Full name and phone number cannot be empty."
+                return
+            }
+            val tok = _cfToken.value ?: return
+            viewModelScope.launch {
+                CloudflareApiClient.updateProfile(tok, newFullName, newPhone, newPassword)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Name, phone number & password updated successfully!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to update profile." }
+            }
+            return
+        }
+
         if (newFullName.isBlank() || newPhone.isBlank() || newPassword.isBlank()) {
             _toastMessage.value = "Full name, phone number, and password cannot be empty."
             return
@@ -370,12 +538,35 @@ class SchoolViewModel(
         }
     }
 
-    // --- Account Management (Admin full control + Teacher scoped to own class-section) ---
+    // --- Account Management (Admin full control + Teacher strictly own class-section) ---
     fun saveUserAccount(user: SchoolUser) {
         viewModelScope.launch {
             val allUsers = (usersState.value as? DataUiState.Success)?.data ?: emptyList()
             val editor = activeSchoolUser.value
             val editorRole = editor?.role ?: "ADMIN"
+
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                if (user.fullName.isBlank()) {
+                    _toastMessage.value = "Full name is required."
+                    return@launch
+                }
+                if (user.id.isBlank() && user.password.trim().length < 4) {
+                    _toastMessage.value = "Password (min 4 characters) is required for new accounts."
+                    return@launch
+                }
+                CloudflareApiClient.saveUser(tok, user)
+                    .onSuccess { saved ->
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = if (saved.role == "STUDENT") {
+                            "Student ${saved.fullName} (Roll ${saved.userId}) saved to Cloudflare!"
+                        } else {
+                            "${saved.role.replace('_', ' ')} account saved & live!"
+                        }
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to save account." }
+                return@launch
+            }
 
             val preparedUser = if (editorRole == "TEACHER") {
                 if (editor == null || editor.className.isBlank() || editor.section.isBlank()) {
@@ -426,6 +617,16 @@ class SchoolViewModel(
 
     fun deleteUser(user: SchoolUser) {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.deleteUser(tok, user.id)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "${user.fullName} account removed."
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to remove account." }
+                return@launch
+            }
             repository.deleteUserAccount(user)
                 .onSuccess { _toastMessage.value = "${user.fullName} account removed." }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to remove account." }
@@ -434,6 +635,16 @@ class SchoolViewModel(
 
     fun deleteRecord(collectionName: String, docId: String, label: String = "Record") {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.deleteRecord(tok, collectionName, docId)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "$label deleted."
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Delete failed." }
+                return@launch
+            }
             repository.deleteDocument(collectionName, docId)
                 .onSuccess { _toastMessage.value = "$label deleted." }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Delete failed." }
@@ -442,6 +653,17 @@ class SchoolViewModel(
 
     fun postCircular(circular: Circular) {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.postCircular(tok, circular)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        val senderTag = if (circular.senderRole == "TEACHER") "Notice" else "Circular"
+                        _toastMessage.value = "$senderTag published to ${circular.audience}!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to publish notice." }
+                return@launch
+            }
             repository.addCircular(circular)
                 .onSuccess {
                     val senderTag = if (circular.senderRole == "TEACHER") "Notice" else "Circular"
@@ -453,6 +675,16 @@ class SchoolViewModel(
 
     fun publishCampusPoster(poster: CampusPoster) {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.postCampusPoster(tok, poster)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Daily campus poster published for all students!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to publish campus poster." }
+                return@launch
+            }
             repository.addCampusPoster(poster)
                 .onSuccess { _toastMessage.value = "Daily campus poster published for all students!" }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to publish campus poster." }
@@ -462,6 +694,16 @@ class SchoolViewModel(
     // --- Teacher Actions ---
     fun saveDailyDpt(dpt: DptDaily) {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.saveDptDaily(tok, dpt)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Daily DPT status published live!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to save DPT status." }
+                return@launch
+            }
             repository.saveDptDaily(dpt)
                 .onSuccess { _toastMessage.value = "Daily DPT status published live!" }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to save DPT status." }
@@ -470,6 +712,16 @@ class SchoolViewModel(
 
     fun saveWeeklyDptMarks(entries: List<DptWeekly>) {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.saveDptWeeklyBatch(tok, entries)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Weekly DPT marks saved & class ranks updated!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed saving weekly marks." }
+                return@launch
+            }
             var failed: Throwable? = null
             for (entry in entries) {
                 repository.saveDptWeekly(entry).onFailure { failed = it }
@@ -490,6 +742,16 @@ class SchoolViewModel(
     ) {
         viewModelScope.launch {
             val slotMaps = slots.map { it.toSlotMap() }
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.saveTimetable(tok, className, section, slotMaps)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Timetable saved for $className-$section!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to save timetable." }
+                return@launch
+            }
             repository.saveTimetable(className, section, slotMaps, updatedBy)
                 .onSuccess { _toastMessage.value = "Timetable saved for $className-$section!" }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to save timetable." }
@@ -498,6 +760,13 @@ class SchoolViewModel(
 
     fun markStudentAttendance(record: AttendanceRecord) {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.saveAttendanceBatch(tok, listOf(record))
+                    .onSuccess { refreshCloudflareDashboard(tok) }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to mark attendance." }
+                return@launch
+            }
             repository.markAttendance(record)
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to mark attendance." }
         }
@@ -505,19 +774,30 @@ class SchoolViewModel(
 
     fun markAllPresent(students: List<SchoolUser>, date: String, className: String, section: String, markedBy: String) {
         viewModelScope.launch {
+            val records = students.map { st ->
+                AttendanceRecord(
+                    date = date,
+                    className = className,
+                    section = section,
+                    studentDocId = st.id,
+                    status = "Present",
+                    markedBy = markedBy,
+                )
+            }
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.saveAttendanceBatch(tok, records)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Marked ${records.size} students Present for $date"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to mark attendance." }
+                return@launch
+            }
             var failed: Throwable? = null
             var updatedCount = 0
-            students.forEach { st ->
-                repository.markAttendance(
-                    AttendanceRecord(
-                        date = date,
-                        className = className,
-                        section = section,
-                        studentDocId = st.id,
-                        status = "Present",
-                        markedBy = markedBy,
-                    )
-                ).onSuccess { updatedCount++ }.onFailure { failed = it }
+            records.forEach { rec ->
+                repository.markAttendance(rec).onSuccess { updatedCount++ }.onFailure { failed = it }
             }
             _toastMessage.value = if (failed == null) {
                 "Marked $updatedCount students Present for $date"
@@ -529,6 +809,16 @@ class SchoolViewModel(
 
     fun updateLeaveStatus(leaveId: String, status: String, remark: String) {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.updateLeaveStatus(tok, leaveId, status, remark)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Leave marked $status."
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to update leave." }
+                return@launch
+            }
             repository.updateLeaveStatus(leaveId, status, remark)
                 .onSuccess { _toastMessage.value = "Leave marked $status." }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to update leave." }
@@ -537,6 +827,16 @@ class SchoolViewModel(
 
     fun postHomework(hw: HomeworkItem) {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.postHomework(tok, hw)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Homework published to student diary!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to post homework." }
+                return@launch
+            }
             repository.addHomework(hw)
                 .onSuccess { _toastMessage.value = "Homework published to student diary!" }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to post homework." }
@@ -545,6 +845,16 @@ class SchoolViewModel(
 
     fun publishTermMarks(card: TermMarkCard) {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.publishTermMarks(tok, card)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Term report card published for ${card.studentName}!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to publish term marks." }
+                return@launch
+            }
             repository.saveTermMarkCard(card)
                 .onSuccess { _toastMessage.value = "Term report card published for ${card.studentName}!" }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to publish term marks." }
@@ -553,6 +863,16 @@ class SchoolViewModel(
 
     fun replyDoubt(doubtId: String, reply: String, repliedBy: String) {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.replyDoubt(tok, doubtId, reply)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Reply sent to student/parent!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to send reply." }
+                return@launch
+            }
             repository.replyDoubt(doubtId, reply, repliedBy)
                 .onSuccess { _toastMessage.value = "Reply sent to student/parent!" }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to send reply." }
@@ -562,6 +882,16 @@ class SchoolViewModel(
     // --- Fee Manager & App Update Actions ---
     fun saveGatewayConfig(config: GatewayConfig, successToast: String = "School configuration saved live!") {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.saveGatewayConfig(tok, config)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = successToast
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to save configuration." }
+                return@launch
+            }
             repository.saveGatewayConfig(config)
                 .onSuccess { _toastMessage.value = successToast }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to save configuration." }
@@ -654,8 +984,7 @@ class SchoolViewModel(
         useStudentDefaultIfBulk: Boolean,
     ) {
         viewModelScope.launch {
-            var count = 0
-            for (st in targets) {
+            val builtItems = targets.mapNotNull { st ->
                 val amt = if (useStudentDefaultIfBulk) {
                     when (feeHead) {
                         "Monthly Tuition Fee" -> if (st.monthlyTuition > 0) st.monthlyTuition else customAmount
@@ -665,25 +994,43 @@ class SchoolViewModel(
                 } else {
                     customAmount
                 }
-                if (amt <= 0L) continue
-                repository.addFeeItem(
-                    FeeItem(
-                        studentDocId = st.id,
-                        title = "$feeHead ($month)",
-                        month = month,
-                        amount = amt,
-                        status = "UNPAID",
-                        paymentId = "",
-                    )
+                if (amt <= 0L) null
+                else FeeItem(
+                    studentDocId = st.id,
+                    title = "$feeHead ($month)",
+                    month = month,
+                    amount = amt,
+                    status = "UNPAID",
+                    paymentId = "",
                 )
-                count++
             }
-            _toastMessage.value = "Assigned fee demand to $count student(s)."
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.assignFeeItems(tok, builtItems)
+                    .onSuccess { cnt ->
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Assigned fee demand to $cnt student(s)."
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed assigning fee demands." }
+                return@launch
+            }
+            builtItems.forEach { repository.addFeeItem(it) }
+            _toastMessage.value = "Assigned fee demand to ${builtItems.size} student(s)."
         }
     }
 
     fun verifyPayment(payment: FeePayment, verifierName: String, verifiedAtStr: String, existingVerifiedCount: Int) {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.verifyOrRejectPayment(tok, payment.id, "VERIFY")
+                    .onSuccess { receiptNo ->
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Verified! Official Receipt $receiptNo issued."
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to verify payment." }
+                return@launch
+            }
             val receiptNo = "DPS-RCP-2026-${(existingVerifiedCount + 102).toString().padStart(4, '0')}"
             repository.verifyPayment(payment, receiptNo, verifierName, verifiedAtStr)
                 .onSuccess { _toastMessage.value = "Verified! Official Receipt $receiptNo issued." }
@@ -693,7 +1040,18 @@ class SchoolViewModel(
 
     fun rejectPayment(payment: FeePayment, reason: String, verifierName: String, verifiedAtStr: String) {
         viewModelScope.launch {
-            repository.rejectPayment(payment, reason.ifBlank { "UTR did not match bank ledger" }, verifierName, verifiedAtStr)
+            val cleanReason = reason.ifBlank { "UTR did not match bank ledger" }
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.verifyOrRejectPayment(tok, payment.id, "REJECT", cleanReason)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Payment rejected & dues restored to UNPAID."
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to reject payment." }
+                return@launch
+            }
+            repository.rejectPayment(payment, cleanReason, verifierName, verifiedAtStr)
                 .onSuccess { _toastMessage.value = "Payment rejected & dues restored to UNPAID." }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to reject payment." }
         }
@@ -718,6 +1076,16 @@ class SchoolViewModel(
         }
         val total = selectedFees.sumOf { it.amount }
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.submitPaymentProof(tok, selectedFees.map { it.id }, mode, cleanRef, upiApp)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "UTR submitted! Fee Manager will verify & issue your receipt."
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Submission failed." }
+                return@launch
+            }
             repository.submitPaymentProof(
                 payment = FeePayment(
                     studentDocId = student.id,
@@ -741,6 +1109,16 @@ class SchoolViewModel(
 
     fun submitLeave(leave: LeaveRequest) {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.submitLeave(tok, leave)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Leave application sent to Class Teacher!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to submit leave." }
+                return@launch
+            }
             repository.submitLeave(leave)
                 .onSuccess { _toastMessage.value = "Leave application sent to Class Teacher!" }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to submit leave." }
@@ -749,6 +1127,16 @@ class SchoolViewModel(
 
     fun submitDoubt(doubt: DoubtMessage) {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.submitDoubt(tok, doubt)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Doubt posted to teacher helpdesk!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to post doubt." }
+                return@launch
+            }
             repository.submitDoubt(doubt)
                 .onSuccess { _toastMessage.value = "Doubt posted to teacher helpdesk!" }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to post doubt." }
@@ -861,6 +1249,17 @@ class SchoolViewModel(
 
     fun publishCraftProject(project: CraftProject) {
         viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.postCraftProject(tok, project)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _craftAiImageState.value = CraftAiImageState.Idle
+                        _toastMessage.value = "Craft Idea & Project Skill published to School Showcase!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to publish craft idea." }
+                return@launch
+            }
             repository.addCraftProject(project)
                 .onSuccess {
                     _craftAiImageState.value = CraftAiImageState.Idle
@@ -876,6 +1275,16 @@ class SchoolViewModel(
         _likingProjectIds.value += project.id
         viewModelScope.launch {
             try {
+                if (isCloudflareMode) {
+                    val tok = _cfToken.value ?: return@launch
+                    CloudflareApiClient.toggleCraftLike(tok, project.id)
+                        .onSuccess { liked ->
+                            refreshCloudflareDashboard(tok)
+                            _toastMessage.value = if (liked) "Liked! (1 like per account)" else "Like removed."
+                        }
+                        .onFailure { _toastMessage.value = it.localizedMessage ?: "Could not update like." }
+                    return@launch
+                }
                 repository.toggleCraftProjectLike(project.id, currentUser.id)
                     .onSuccess { liked ->
                         _toastMessage.value = if (liked) "Liked! (1 like per account)" else "Like removed."
