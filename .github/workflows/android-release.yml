@@ -22,7 +22,7 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Prepare Android SDK 36 & Build Tools
+      - name: Prepare Android SDK 36.1 & Licenses
         shell: bash
         run: |
           set -euo pipefail
@@ -40,7 +40,7 @@ jobs:
           if [ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
             SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           else
-            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1 || true)"
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f 2>/dev/null | sort -V | tail -n 1 || true)"
           fi
 
           if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
@@ -57,17 +57,31 @@ jobs:
             SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           fi
 
-          echo "Using sdkmanager: $SDKMANAGER"
-          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
-          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-
           mkdir -p "$SDK_ROOT/licenses"
-          # Ensure standard Android SDK license hashes are accepted before invoking sdkmanager
+          # Pre-accept standard and preview Android SDK licenses for both sdkmanager and AGP auto-download
           cat <<'EOF' > "$SDK_ROOT/licenses/android-sdk-license"
           8933bad161af4178b1185d1a37fbf41ea5269c55
           d56f5187479451eabf01fb78af6dfcb131a6481e
           24333f8a63b6825ea9c5514f83c2829b004d1fee
           EOF
+          cat <<'EOF' > "$SDK_ROOT/licenses/android-sdk-preview-license"
+          84831b9409646a918e30573bab4c9c91346d8abd
+          EOF
+
+          set +o pipefail
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
+          set -o pipefail
+
+          # Upgrade cmdline-tools so sdkmanager recognizes minor API levels like android-36.1
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "cmdline-tools;latest" || true
+          NEW_SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f 2>/dev/null | sort -V | tail -n 1 || true)"
+          if [ -n "$NEW_SDKMANAGER" ] && [ -x "$NEW_SDKMANAGER" ]; then
+            SDKMANAGER="$NEW_SDKMANAGER"
+          fi
+
+          echo "Using sdkmanager: $SDKMANAGER"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
           set +o pipefail
           yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
@@ -75,16 +89,14 @@ jobs:
 
           "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install \
             "platform-tools" \
-            "build-tools;36.0.0" \
-            "platforms;android-36"
+            "build-tools;36.0.0"
+
+          # Pre-install Android SDK 36.1 (non-blocking: AGP 9.1.1 also auto-downloads platforms;android-36.1 if needed)
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platforms;android-36.1" || \
+            echo "::notice::sdkmanager did not pre-install platforms;android-36.1; AGP 9.1.1 will auto-download it during Gradle build."
 
           echo "=== Installed SDK Platforms & Build Tools ==="
-          ls -la "$SDK_ROOT/platforms" "$SDK_ROOT/build-tools"
-
-          if [ ! -d "$SDK_ROOT/platforms/android-36" ] && [ ! -d "$SDK_ROOT/platforms/android-36.1" ]; then
-            echo "ERROR: Android SDK 36 platform directory missing after installation."
-            exit 1
-          fi
+          ls -la "$SDK_ROOT/platforms" "$SDK_ROOT/build-tools" || true
 
       - name: Normalize & Verify Cloudflare Worker URL Secret
         shell: bash
@@ -159,18 +171,19 @@ jobs:
 
           keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey
 
-      - name: Build Android APK & App Bundle (Gradle --no-daemon)
+      - name: Build Android APK (Gradle --no-daemon)
         shell: bash
         env:
           CLOUDFLARE_API_URL: ${{ env.CLEAN_CLOUDFLARE_API_URL }}
         run: |
           set -euo pipefail
 
-          gradle assembleDebug bundleDebug \
+          gradle assembleDebug \
             --no-daemon \
             --no-configuration-cache \
             --stacktrace \
             -Dorg.gradle.daemon=false \
+            -Pandroid.builder.sdkDownload=true \
             -PCLOUDFLARE_API_URL="$CLOUDFLARE_API_URL"
 
       - name: Align, Sign (v1/v2/v3) & Validate APK Package
@@ -180,7 +193,6 @@ jobs:
 
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           RAW_APK="app/build/outputs/apk/debug/app-debug.apk"
-          RAW_AAB="app/build/outputs/bundle/debug/app-debug.aab"
           if [ ! -s "$RAW_APK" ]; then
             echo "ERROR: Built APK not found or empty at $RAW_APK"
             exit 1
@@ -219,9 +231,6 @@ jobs:
           if [ -x "$AAPT2" ]; then
             "$AAPT2" dump badging release/DoonPublicSchool-Etah.apk | grep -E "^(package|sdkVersion|targetSdkVersion|application-label):" || true
           fi
-          if [ -s "$RAW_AAB" ]; then
-            cp "$RAW_AAB" release/DoonPublicSchool-Etah.aab
-          fi
           ls -lh release/
 
       - name: Upload APK Artifact
@@ -230,13 +239,6 @@ jobs:
           name: DoonPublicSchool-Etah-APK
           path: release/DoonPublicSchool-Etah.apk
           if-no-files-found: error
-
-      - name: Upload App Bundle (AAB) Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: DoonPublicSchool-Etah-AAB
-          path: release/DoonPublicSchool-Etah.aab
-          if-no-files-found: warn
 
       - name: Publish GitHub Release with APK
         uses: softprops/action-gh-release@v2
