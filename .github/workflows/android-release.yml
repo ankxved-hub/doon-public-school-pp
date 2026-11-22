@@ -2,6 +2,7 @@ name: Publish Doon Public School Etah APK Release
 
 on:
   push:
+    branches: [ main, master ]
   workflow_dispatch:
 
 permissions:
@@ -24,30 +25,39 @@ jobs:
       - name: Setup Android SDK Command-Line Tools
         uses: android-actions/setup-android@v3
 
-      - name: Accept Android Licenses & Install SDK 36.1
+      - name: Install Android SDK 36.1 & Build Tools
         run: |
-          SDKMANAGER="$(command -v sdkmanager || true)"
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(command -v sdkmanager || find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1)"
           if [ -z "$SDKMANAGER" ]; then
-            SDKMANAGER="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1)"
+            echo "ERROR: sdkmanager not found under $SDK_ROOT"
+            exit 1
           fi
+
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-          "$SDKMANAGER" --update || true
-          "$SDKMANAGER" "platform-tools" "platforms;android-36.1" "build-tools;36.0.0" || \
-            "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0" || true
-          ls -la "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools" || true
+          "$SDKMANAGER" --install "cmdline-tools;latest" >/dev/null 2>&1 || true
+          if [ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          fi
+
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" --install "platform-tools" "platforms;android-36.1" "build-tools;36.0.0" || \
+            "$SDKMANAGER" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" || true
+
+          echo "=== Installed SDK Platforms & Build Tools ==="
+          ls -la "$SDK_ROOT/platforms" "$SDK_ROOT/build-tools" || true
 
       - name: Setup Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
 
-      - name: Prepare Signing Keystore
+      - name: Decode & Verify Signing Keystore
         run: |
           if [ -f "debug.keystore.base64" ]; then
             base64 -d debug.keystore.base64 > debug.keystore
-          fi
-          if [ ! -s "debug.keystore" ]; then
-            rm -f debug.keystore
+          else
+            echo "WARNING: debug.keystore.base64 missing; generating fallback debug.keystore"
             keytool -genkeypair -v \
               -keystore debug.keystore \
               -storepass android \
@@ -59,6 +69,13 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
+          if [ ! -s "debug.keystore" ]; then
+            echo "ERROR: debug.keystore is empty or failed to decode"
+            exit 1
+          fi
+
+          keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey
+
       - name: Build Android APK with Gradle
         env:
           CLOUDFLARE_API_URL: ${{ secrets.CLOUDFLARE_API_URL }}
@@ -69,38 +86,52 @@ jobs:
             echo "WARNING: secrets.CLOUDFLARE_API_URL is EMPTY — APK will allow connecting Cloudflare URL inside the app."
           fi
 
-          gradle assembleDebug --no-daemon --no-configuration-cache --stacktrace -PCLOUDFLARE_API_URL="$CLOUDFLARE_API_URL"
+          gradle assembleDebug \
+            --no-daemon \
+            --no-configuration-cache \
+            --stacktrace \
+            -PCLOUDFLARE_API_URL="$CLOUDFLARE_API_URL"
 
-      - name: Align, Sign & Verify APK
+      - name: Align, Sign & Validate APK Package
         run: |
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           RAW_APK="app/build/outputs/apk/debug/app-debug.apk"
-          if [ ! -f "$RAW_APK" ]; then
-            echo "ERROR: Expected built APK not found at $RAW_APK"
+          if [ ! -s "$RAW_APK" ]; then
+            echo "ERROR: Built APK not found or empty at $RAW_APK"
             exit 1
           fi
 
-          BUILD_TOOLS_DIR="$ANDROID_HOME/build-tools/36.0.0"
-          if [ ! -x "$BUILD_TOOLS_DIR/zipalign" ]; then
-            BUILD_TOOLS_DIR="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -n 1)"
+          BUILD_TOOLS_DIR="$SDK_ROOT/build-tools/36.0.0"
+          if [ ! -x "$BUILD_TOOLS_DIR/apksigner" ]; then
+            BUILD_TOOLS_DIR="$(find "$SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -n 1)"
           fi
           ZIPALIGN="$BUILD_TOOLS_DIR/zipalign"
           APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+          AAPT2="$BUILD_TOOLS_DIR/aapt2"
 
+          rm -rf release
           mkdir -p release
-          "$ZIPALIGN" -p -f 4 "$RAW_APK" release/DoonPublicSchool-Etah.apk
-          "$ZIPALIGN" -c -v 4 release/DoonPublicSchool-Etah.apk
+
+          "$ZIPALIGN" -p -f 4 "$RAW_APK" /tmp/dps-aligned.apk
+          "$ZIPALIGN" -c -v 4 /tmp/dps-aligned.apk
 
           "$APKSIGNER" sign \
             --ks debug.keystore \
             --ks-key-alias androiddebugkey \
             --ks-pass pass:android \
             --key-pass pass:android \
+            --min-sdk-version 24 \
             --v1-signing-enabled true \
             --v2-signing-enabled true \
             --v3-signing-enabled true \
-            release/DoonPublicSchool-Etah.apk
+            --v4-signing-enabled false \
+            --out release/DoonPublicSchool-Etah.apk \
+            /tmp/dps-aligned.apk
 
           "$APKSIGNER" verify -v --print-certs release/DoonPublicSchool-Etah.apk
+          if [ -x "$AAPT2" ]; then
+            "$AAPT2" dump badging release/DoonPublicSchool-Etah.apk | grep -E "^(package|sdkVersion|targetSdkVersion|application-label):" || true
+          fi
           ls -lh release/DoonPublicSchool-Etah.apk
 
       - name: Upload APK Artifact
@@ -119,9 +150,10 @@ jobs:
           name: "Doon Public School, Etah ERP v1.2.${{ github.run_number }}"
           body: |
             ### Doon Public School, Etah — Official Android App (APK)
-            1. Scroll down to **Assets** and tap **`DoonPublicSchool-Etah.apk`** directly (do not download a `.zip` source archive).
-            2. If prompted by Chrome/Files, allow **Install unknown apps**.
-            3. Built with full **v1 + v2 + v3** APK signatures & 4KB page alignment for Android 7–16 phones.
+            1. Scroll down to **Assets** and tap **`DoonPublicSchool-Etah.apk`** directly (do not download Source code `.zip`).
+            2. If you previously installed an APK with a different signing certificate, uninstall the old app once before installing this release.
+            3. Allow **Install unknown apps** if prompted by Android / Chrome / Files.
+            4. Verified with 4KB/page zipalign + full **v1 + v2 + v3** APK signatures (`minSdk 24`–`targetSdk 36`).
           files: release/DoonPublicSchool-Etah.apk
           fail_on_unmatched_files: true
           draft: false
