@@ -286,6 +286,108 @@ fun AppUpdateBannerCard(
     }
 }
 
+@Composable
+fun AppUpdatePromptDialog(
+    update: AppUpdateState.UpdateAvailable,
+    onDismiss: () -> Unit,
+    onShowMessage: (String) -> Unit = {},
+) {
+    val context = LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag("app_update_prompt_dialog"),
+        icon = {
+            Surface(
+                color = NavyDeep,
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.5.dp, GoldAmber),
+                modifier = Modifier.size(56.dp),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Image(
+                        painter = painterResource(id = R.drawable.dps_real_logo),
+                        contentDescription = "Doon Public School Official Logo",
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(6.dp)
+                            .clip(RoundedCornerShape(10.dp)),
+                    )
+                }
+            }
+        },
+        title = {
+            Text(
+                text = "Install App Update • v${update.latestVersionName}",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "A newer version of the Doon Public School, Etah app is available. Please install the latest update for all features and fixes.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = "Installed: v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = "New Version: v${update.latestVersionName} (Build ${update.latestVersionCode})",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = EmeraldSuccess,
+                        )
+                    }
+                }
+                if (update.releaseNotes.isNotBlank()) {
+                    Text(
+                        text = update.releaseNotes,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { openExternalLink(context, update.downloadUrl, onShowMessage) },
+                colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag("app_update_prompt_install_btn"),
+            ) {
+                Icon(Icons.Filled.InstallMobile, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Install Update Now", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag("app_update_prompt_later_btn"),
+            ) {
+                Text("Later")
+            }
+        },
+    )
+}
+
 /**
  * Profile & Settings Dialog for ALL roles (Admin, Teacher, Fee Manager, Student).
  * Includes Dark Mode preference toggle (persisted locally via DataStore),

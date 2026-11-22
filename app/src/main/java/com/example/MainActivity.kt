@@ -40,6 +40,7 @@ import com.example.data.repository.SchoolRepository
 import com.example.ui.auth.GoogleAuthGateScreen
 import com.example.ui.auth.signOutGoogle
 import com.example.ui.components.AppUpdateBannerCard
+import com.example.ui.components.AppUpdatePromptDialog
 import com.example.ui.components.ProfileEditDialog
 import com.example.ui.screens.AdminScreen
 import com.example.ui.screens.AppCreditsScreen
@@ -188,7 +189,8 @@ private fun AuthenticatedSchoolShell(
     val appUpdateState by viewModel.appUpdateState.collectAsStateWithLifecycle()
 
     val users = (usersUi as? DataUiState.Success)?.data ?: emptyList()
-    val gateway = (gatewayUi as? DataUiState.Success)?.data?.firstOrNull() ?: GatewayConfig()
+    val rawGateway = (gatewayUi as? DataUiState.Success)?.data?.firstOrNull()
+    val gateway = rawGateway ?: GatewayConfig()
     val circulars = (circularsUi as? DataUiState.Success)?.data ?: emptyList()
     val dptDaily = (dptDailyUi as? DataUiState.Success)?.data ?: emptyList()
     val dptWeekly = (dptWeeklyUi as? DataUiState.Success)?.data ?: emptyList()
@@ -203,14 +205,17 @@ private fun AuthenticatedSchoolShell(
     val campusPosters = (campusPostersUi as? DataUiState.Success)?.data ?: emptyList()
     val timetables = (timetablesUi as? DataUiState.Success)?.data ?: emptyList()
 
+    var promptDismissedCode by remember { mutableStateOf<Long?>(null) }
     var dismissedUpdateCode by remember { mutableStateOf<Long?>(null) }
     LaunchedEffect(
-        gateway.latestVersionCode,
-        gateway.latestVersionName,
-        gateway.apkDownloadUrl,
-        gateway.githubRepoSlug,
+        rawGateway?.latestVersionCode,
+        rawGateway?.latestVersionName,
+        rawGateway?.apkDownloadUrl,
+        rawGateway?.githubRepoSlug,
     ) {
-        viewModel.checkForAppUpdate(gateway, manual = false)
+        if (rawGateway != null) {
+            viewModel.checkForAppUpdate(rawGateway, manual = false)
+        }
     }
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -223,59 +228,57 @@ private fun AuthenticatedSchoolShell(
     }
 
     val user = activeUser
-    if (user == null) {
-        if (isRestoringSavedSession) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Brush.verticalGradient(listOf(NavyDeep, NavyRoyal, NavyDeep)))
-                    .windowInsetsPadding(WindowInsets.safeDrawing),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                    modifier = Modifier.padding(24.dp),
-                ) {
-                    CircularProgressIndicator(color = GoldAmber)
-                    Text(
-                        text = SchoolInfo.NAME,
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Color.White,
-                    )
-                    Text(
-                        text = "Opening your saved portal...",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = GoldAmber,
-                    )
-                }
-            }
-        } else {
-            SchoolRoleLoginScreen(
-                isSeeding = isSeeding,
-                isSyncError = usersUi is DataUiState.Error,
-                googleEmail = googleEmail,
-                isDarkMode = isDarkMode,
-                onToggleDarkMode = onToggleDarkMode,
-                onRetrySync = { viewModel.retryCloudSync(userInitiated = true) },
-                onLoginRole = { role, userId, password -> viewModel.loginSchoolRole(role, userId, password) },
-                onGoogleSignOut = onGoogleSignOut,
-                isCloudflareMode = viewModel.isCloudflareMode,
-                needsCloudflareAdminSetup = needsCloudflareAdminSetup,
-                onClaimCloudflareAdmin = { fn, uidVal, ph, pw -> viewModel.claimCloudflareAdmin(fn, uidVal, ph, pw) },
-            )
-        }
-        return
-    }
+    var showWelcomeCreditsPage by remember(user?.id, user?.role) { mutableStateOf(true) }
 
-    var showWelcomeCreditsPage by remember(user.id, user.role) { mutableStateOf(true) }
-    if (showWelcomeCreditsPage) {
-        AppCreditsScreen(
-            user = user,
-            onContinue = { showWelcomeCreditsPage = false },
-        )
-        return
-    }
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (user == null) {
+            if (isRestoringSavedSession) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Brush.verticalGradient(listOf(NavyDeep, NavyRoyal, NavyDeep)))
+                        .windowInsetsPadding(WindowInsets.safeDrawing),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        modifier = Modifier.padding(24.dp),
+                    ) {
+                        CircularProgressIndicator(color = GoldAmber)
+                        Text(
+                            text = SchoolInfo.NAME,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = Color.White,
+                        )
+                        Text(
+                            text = "Opening your saved portal...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = GoldAmber,
+                        )
+                    }
+                }
+            } else {
+                SchoolRoleLoginScreen(
+                    isSeeding = isSeeding,
+                    isSyncError = usersUi is DataUiState.Error,
+                    googleEmail = googleEmail,
+                    isDarkMode = isDarkMode,
+                    onToggleDarkMode = onToggleDarkMode,
+                    onRetrySync = { viewModel.retryCloudSync(userInitiated = true) },
+                    onLoginRole = { role, userId, password -> viewModel.loginSchoolRole(role, userId, password) },
+                    onGoogleSignOut = onGoogleSignOut,
+                    isCloudflareMode = viewModel.isCloudflareMode,
+                    needsCloudflareAdminSetup = needsCloudflareAdminSetup,
+                    onClaimCloudflareAdmin = { fn, uidVal, ph, pw -> viewModel.claimCloudflareAdmin(fn, uidVal, ph, pw) },
+                )
+            }
+        } else if (showWelcomeCreditsPage) {
+            AppCreditsScreen(
+                user = user,
+                onContinue = { showWelcomeCreditsPage = false },
+            )
+        } else {
 
     val tabs = remember(user.role) {
         when (user.role) {
@@ -644,5 +647,16 @@ private fun AuthenticatedSchoolShell(
             onCheckForUpdate = { viewModel.checkForAppUpdate(gateway, manual = true) },
             onShowMessage = { viewModel.showMessage(it) },
         )
+        }
+        }
+
+        val activeUpdate = appUpdateState as? AppUpdateState.UpdateAvailable
+        if (activeUpdate != null && promptDismissedCode != activeUpdate.latestVersionCode) {
+            AppUpdatePromptDialog(
+                update = activeUpdate,
+                onDismiss = { promptDismissedCode = activeUpdate.latestVersionCode },
+                onShowMessage = { viewModel.showMessage(it) },
+            )
+        }
     }
 }

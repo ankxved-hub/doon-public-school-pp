@@ -196,6 +196,7 @@ function clearNode(node) {
 const state = {
   booting: true,
   needsAdminSetup: false,
+  appUpdate: null,
   publicTab: "LOGIN",
   selectedRole: "STUDENT",
   darkMode: false,
@@ -315,6 +316,47 @@ function buildCreditsCard() {
       SCHOOL_INFO.mentors.join(", "),
     ]),
     el("p", { style: { margin: "0", fontSize: "0.82rem", color: "var(--text-muted)" }, textContent: `${SCHOOL_INFO.address} • ${SCHOOL_INFO.phones}` }),
+  ]);
+}
+
+function resolveAppUpdateUrl(update) {
+  if (!update) return "";
+  const direct = String(update.apkDownloadUrl || "").trim();
+  if (isSafeHttpUrl(direct)) return direct;
+  const slug = String(update.githubRepoSlug || "")
+    .trim()
+    .replace(/^https?:\/\/github\.com\//i, "")
+    .replace(/^\/+|\/+$/g, "");
+  if (slug.includes("/")) {
+    const ghUrl = `https://github.com/${slug}/releases/latest/download/DoonPublicSchool-Etah.apk`;
+    if (isSafeHttpUrl(ghUrl)) return ghUrl;
+  }
+  return "";
+}
+
+function buildAppUpdateCard(update) {
+  const downloadUrl = resolveAppUpdateUrl(update);
+  if (!downloadUrl) return null;
+  const vName = String(update?.latestVersionName || "1.2");
+  const vCode = Number(update?.latestVersionCode || 3);
+  const notes = String(update?.updateNotes || "").trim();
+  return el("section", { className: "card card-navy" }, [
+    el("div", { className: "section-title", style: { marginBottom: "6px" } }, [
+      el("span", { style: { color: "var(--gold-amber)" }, textContent: `Android App Update Available • v${vName} (Build ${vCode})` }),
+      el("span", { className: "pill pill-gold", textContent: "Install APK" }),
+    ]),
+    el("p", {
+      style: { margin: "0 0 10px", fontSize: "0.88rem", color: "rgba(255,255,255,0.88)" },
+      textContent: notes || "A new Doon Public School, Etah Android app update is ready for Students, Teachers, Fee Managers, and Admin.",
+    }),
+    el("a", {
+      href: downloadUrl,
+      target: "_blank",
+      rel: "noopener noreferrer",
+      className: "btn btn-gold btn-sm",
+      style: { textDecoration: "none", display: "inline-flex", alignItems: "center" },
+      textContent: `Download & Install Android App (v${vName})`,
+    }),
   ]);
 }
 
@@ -692,6 +734,7 @@ function renderLoginScreen(root) {
           })
         )
       ),
+      buildAppUpdateCard(state.appUpdate),
       publicBodyCard,
       el("section", { className: "card card-navy" }, [
         el("div", { className: "eyebrow", style: { color: "var(--gold-amber)" }, textContent: "Official Academic Wings" }),
@@ -2408,8 +2451,8 @@ function renderAdminPortal(tabIdx) {
 
   if (tabIdx === 0) {
     // Overview + In-App APK Update Publisher + Daily Campus Poster
-    let latestVersionCode = String(gw.latestVersionCode || 2);
-    let latestVersionName = gw.latestVersionName || "1.1";
+    let latestVersionCode = String(gw.latestVersionCode || 3);
+    let latestVersionName = gw.latestVersionName || "1.2";
     let githubRepoSlug = gw.githubRepoSlug || "";
     let apkDownloadUrl = gw.apkDownloadUrl || "";
     let updateNotes = gw.updateNotes || "";
@@ -2426,7 +2469,11 @@ function renderAdminPortal(tabIdx) {
         el("div", { className: "stat-card" }, [el("div", { className: "stat-lbl", textContent: "Circulars Published" }), el("div", { className: "stat-val", textContent: String(circulars.length) })]),
       ]),
       el("section", { className: "card" }, [
-        el("h3", { className: "section-title", textContent: "Publish In-App Android APK Update (Installs Inside App)" }),
+        el("h3", { className: "section-title", textContent: "Publish In-App Android APK Update (Asks Every App to Install)" }),
+        el("p", {
+          style: { margin: "0 0 12px", fontSize: "0.86rem", color: "var(--text-muted)" },
+          textContent: "When published with a higher Version Code and APK URL (or GitHub owner/repo), every installed phone pops up an Install Update prompt across the login screen and all portals.",
+        }),
         el("form", {
           className: "form-grid",
           onSubmit: async (e) => {
@@ -2434,7 +2481,7 @@ function renderAdminPortal(tabIdx) {
             await apiRequest("/api/gateway", {
               method: "PUT",
               body: JSON.stringify({
-                latestVersionCode: Number(latestVersionCode || 2),
+                latestVersionCode: Number(latestVersionCode || 3),
                 latestVersionName,
                 githubRepoSlug,
                 apkDownloadUrl,
@@ -2442,7 +2489,8 @@ function renderAdminPortal(tabIdx) {
               }),
             });
             await refreshDashboard();
-            showToast("In-app update published live to all Android devices!");
+            state.appUpdate = state.dashboard?.gateway || state.appUpdate;
+            showToast("In-app update published live — all apps will ask to install!");
             render();
           },
         }, [
@@ -3139,7 +3187,11 @@ function renderAuthenticatedShell(root) {
           ? renderFeeManagerPortal(state.activeTab)
           : renderStudentPortal(state.activeTab);
 
-  const mainContent = el("main", { className: "main-content" }, [pageBody, buildCreditsCard()]);
+  const mainContent = el("main", { className: "main-content" }, [
+    buildAppUpdateCard(state.dashboard?.gateway || state.appUpdate),
+    pageBody,
+    buildCreditsCard(),
+  ]);
 
   root.appendChild(topbar);
   root.appendChild(mobileTabs);
@@ -3176,6 +3228,7 @@ async function bootstrap() {
   try {
     const boot = await apiRequest("/api/bootstrap/status");
     state.needsAdminSetup = Boolean(boot.needsSetup);
+    state.appUpdate = boot.appUpdate || null;
   } catch (err) {
     showToast(`Cloud connection notice: ${err.message}`);
   } finally {

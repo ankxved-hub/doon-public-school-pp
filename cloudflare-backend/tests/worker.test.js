@@ -72,6 +72,42 @@ function createMockD1() {
       }
       return { results: [], first: null };
     }
+    if (s.startsWith("UPDATE gateway_config SET")) {
+      const [
+        merchant_upi,
+        payee_name,
+        bank_name,
+        account_no,
+        ifsc,
+        razorpay_key_id,
+        latest_version_code,
+        latest_version_name,
+        apk_download_url,
+        github_repo_slug,
+        update_notes,
+        updated_at,
+        id,
+      ] = args;
+      const existing = tables.gateway_config.get(id);
+      if (existing) {
+        tables.gateway_config.set(id, {
+          ...existing,
+          merchant_upi,
+          payee_name,
+          bank_name,
+          account_no,
+          ifsc,
+          razorpay_key_id,
+          latest_version_code,
+          latest_version_name,
+          apk_download_url,
+          github_repo_slug,
+          update_notes,
+          updated_at,
+        });
+      }
+      return { results: [], first: null };
+    }
     if (s.startsWith("ALTER TABLE users ADD COLUMN extra_roles")) {
       return { results: [], first: null };
     }
@@ -658,6 +694,55 @@ test("Multi-role Teacher account supports multiple login roles, role switching, 
     env
   );
   assert.equal(switchForbidden.status, 403);
+});
+
+test("Public /api/bootstrap/status and /api/app-update expose sanitized appUpdate metadata without leaking bank details", async () => {
+  const env = {
+    DB: createMockD1(),
+    JWT_SECRET: "test_secret_key_for_unit_test_only",
+    SCHOOL_NAME: "Doon Public School, Etah",
+  };
+
+  const adminRes = await handleApiRequest(
+    apiReq("/api/auth/claim-admin", "POST", {
+      fullName: "Dr. Principal",
+      userId: "ADMIN01",
+      password: "StrongPassword123",
+    }),
+    env
+  );
+  const { token: adminToken } = await adminRes.json();
+
+  const updateRes = await handleApiRequest(
+    apiReq(
+      "/api/gateway",
+      "PUT",
+      {
+        latestVersionCode: 4,
+        latestVersionName: "1.3",
+        apkDownloadUrl: "https://doonpublicschooletah.in/DoonPublicSchool-Etah.apk",
+        updateNotes: "Multi-role teacher accounts & instant fee updates.",
+      },
+      adminToken
+    ),
+    env
+  );
+  assert.equal(updateRes.status, 200);
+
+  const bootRes = await handleApiRequest(apiReq("/api/bootstrap/status"), env);
+  assert.equal(bootRes.status, 200);
+  const boot = await bootRes.json();
+  assert.equal(boot.appUpdate.latestVersionCode, 4);
+  assert.equal(boot.appUpdate.latestVersionName, "1.3");
+  assert.equal(boot.appUpdate.apkDownloadUrl, "https://doonpublicschooletah.in/DoonPublicSchool-Etah.apk");
+  assert.equal(boot.appUpdate.merchantUpi, undefined);
+  assert.equal(boot.appUpdate.accountNo, undefined);
+
+  const pubRes = await handleApiRequest(apiReq("/api/app-update"), env);
+  assert.equal(pubRes.status, 200);
+  const pub = await pubRes.json();
+  assert.equal(pub.appUpdate.latestVersionCode, 4);
+  assert.equal(pub.appUpdate.ifsc, undefined);
 });
 
 test("schema.sql contains required indexes for 3,000-user scale", () => {

@@ -112,8 +112,8 @@ function mapGatewayRow(row) {
       accountNo: "39481020004512",
       ifsc: "SBIN0004512",
       razorpayKeyId: "",
-      latestVersionCode: 2,
-      latestVersionName: "1.1",
+      latestVersionCode: 3,
+      latestVersionName: "1.2",
       apkDownloadUrl: "",
       githubRepoSlug: "",
       updateNotes: "",
@@ -127,11 +127,21 @@ function mapGatewayRow(row) {
     accountNo: row.account_no,
     ifsc: row.ifsc,
     razorpayKeyId: row.razorpay_key_id,
-    latestVersionCode: Number(row.latest_version_code || 2),
-    latestVersionName: row.latest_version_name || "1.1",
+    latestVersionCode: Number(row.latest_version_code || 3),
+    latestVersionName: row.latest_version_name || "1.2",
     apkDownloadUrl: row.apk_download_url || "",
     githubRepoSlug: row.github_repo_slug || "",
     updateNotes: row.update_notes || "",
+  };
+}
+
+function mapPublicAppUpdate(row) {
+  return {
+    latestVersionCode: Number(row?.latest_version_code || 3),
+    latestVersionName: row?.latest_version_name || "1.2",
+    apkDownloadUrl: row?.apk_download_url || "",
+    githubRepoSlug: row?.github_repo_slug || "",
+    updateNotes: row?.update_notes || "",
   };
 }
 
@@ -154,8 +164,8 @@ async function ensureDefaultGateway(db) {
       "39481020004512",
       "SBIN0004512",
       "",
-      2,
-      "1.1",
+      3,
+      "1.2",
       "",
       "",
       "",
@@ -276,9 +286,14 @@ export async function handleApiRequest(request, env) {
     }
 
     if (path === "/api/bootstrap/status" && method === "GET") {
-      await ensureDefaultGateway(db);
+      const gw = await ensureDefaultGateway(db);
       const state = await getAdminBootstrapState(db, env);
-      return jsonResponse(state, 200, cors);
+      return jsonResponse({ ...state, appUpdate: mapPublicAppUpdate(gw) }, 200, cors);
+    }
+
+    if (path === "/api/app-update" && method === "GET") {
+      const gw = await ensureDefaultGateway(db);
+      return jsonResponse({ appUpdate: mapPublicAppUpdate(gw) }, 200, cors);
     }
 
     if (path === "/api/admission-inquiries" && method === "POST") {

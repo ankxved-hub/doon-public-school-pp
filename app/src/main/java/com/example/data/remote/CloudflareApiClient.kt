@@ -16,6 +16,11 @@ data class CloudflareAuthSession(
     val user: SchoolUser,
 )
 
+data class CloudflareBootstrapStatus(
+    val needsSetup: Boolean,
+    val appUpdate: GatewayConfig = GatewayConfig(),
+)
+
 data class CloudflareDashboardData(
     val currentUser: SchoolUser,
     val gateway: GatewayConfig,
@@ -91,9 +96,16 @@ object CloudflareApiClient {
         }
     }
 
-    suspend fun getBootstrapStatus(): Result<Boolean> = runCatching {
+    suspend fun getBootstrapStatus(): Result<CloudflareBootstrapStatus> = runCatching {
         val res = requestJson("GET", "/api/bootstrap/status")
-        res.optBoolean("needsSetup", false)
+        val needsSetup = res.optBoolean("needsSetup", false)
+        val appUpdate = parseGateway(res.optJSONObject("appUpdate"))
+        CloudflareBootstrapStatus(needsSetup = needsSetup, appUpdate = appUpdate)
+    }
+
+    suspend fun fetchPublicAppUpdate(): Result<GatewayConfig> = runCatching {
+        val res = requestJson("GET", "/api/app-update")
+        parseGateway(res.optJSONObject("appUpdate"))
     }
 
     suspend fun claimAdmin(
@@ -583,8 +595,8 @@ object CloudflareApiClient {
             accountNo = o.str("accountNo", "account_no"),
             ifsc = o.str("ifsc"),
             razorpayKeyId = o.str("razorpayKeyId", "razorpay_key_id"),
-            latestVersionCode = o.num("latestVersionCode", "latest_version_code", 2L),
-            latestVersionName = o.str("latestVersionName", "latest_version_name", "1.1"),
+            latestVersionCode = o.num("latestVersionCode", "latest_version_code", 3L),
+            latestVersionName = o.str("latestVersionName", "latest_version_name", "1.2"),
             apkDownloadUrl = o.str("apkDownloadUrl", "apk_download_url"),
             githubRepoSlug = o.str("githubRepoSlug", "github_repo_slug"),
             updateNotes = o.str("updateNotes", "update_notes"),

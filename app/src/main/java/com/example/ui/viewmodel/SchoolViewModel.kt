@@ -304,7 +304,10 @@ class SchoolViewModel(
             _isSeeding.value = true
             if (isCloudflareMode) {
                 CloudflareApiClient.getBootstrapStatus()
-                    .onSuccess { needsSetup -> _needsCloudflareAdminSetup.value = needsSetup }
+                    .onSuccess { boot ->
+                        _needsCloudflareAdminSetup.value = boot.needsSetup
+                        checkForAppUpdate(boot.appUpdate, manual = false)
+                    }
                     .onFailure { e -> Log.w(TAG, "Cloudflare bootstrap check failed", e) }
 
                 val saved = sessionPrefs.savedRoleSession(ownerUid).first()
@@ -376,7 +379,10 @@ class SchoolViewModel(
             _isSeeding.value = true
             if (isCloudflareMode) {
                 val bootRes = CloudflareApiClient.getBootstrapStatus()
-                    .onSuccess { _needsCloudflareAdminSetup.value = it }
+                    .onSuccess { boot ->
+                        _needsCloudflareAdminSetup.value = boot.needsSetup
+                        checkForAppUpdate(boot.appUpdate, manual = false)
+                    }
                 val tok = _cfToken.value
                 if (!tok.isNullOrBlank()) {
                     val dashRes = refreshCloudflareDashboard(tok)
@@ -971,6 +977,25 @@ class SchoolViewModel(
     }
 
     fun checkForAppUpdate(gateway: GatewayConfig, manual: Boolean = true) {
+        if (isCloudflareMode && gateway.apkDownloadUrl.isBlank() && gateway.githubRepoSlug.isBlank()) {
+            if (!manual) return
+            viewModelScope.launch {
+                _appUpdateState.value = AppUpdateState.Checking
+                CloudflareApiClient.fetchPublicAppUpdate()
+                    .onSuccess { pubGw ->
+                        if (pubGw.apkDownloadUrl.isBlank() && pubGw.githubRepoSlug.isBlank()) {
+                            _appUpdateState.value = AppUpdateState.UpToDate(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE)
+                        } else {
+                            checkForAppUpdate(pubGw, manual = true)
+                        }
+                    }
+                    .onFailure { e ->
+                        _appUpdateState.value = AppUpdateState.Error(e.localizedMessage ?: "Unable to check for updates right now.")
+                    }
+            }
+            return
+        }
+
         val installedCode = BuildConfig.VERSION_CODE.toLong()
         val installedName = BuildConfig.VERSION_NAME
         val cloudHasNewerCode = gateway.latestVersionCode > installedCode
@@ -1019,6 +1044,8 @@ class SchoolViewModel(
                         )
                     } else if (manual) {
                         _appUpdateState.value = AppUpdateState.UpToDate(installedName, BuildConfig.VERSION_CODE)
+                    } else {
+                        _appUpdateState.value = AppUpdateState.Idle
                     }
                 }
                 .onFailure { e ->

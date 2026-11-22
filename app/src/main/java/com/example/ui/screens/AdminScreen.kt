@@ -626,7 +626,7 @@ private fun AdminDashboardTab(
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                        "When you set a newer Version Code or link your GitHub repository, every installed phone gets an instant Install Update banner inside the app.",
+                        "When you set a newer Version Code (e.g. 4 for next build) with an APK URL or GitHub owner/repo, every phone immediately asks to install the update on the Login screen and across all portals.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
