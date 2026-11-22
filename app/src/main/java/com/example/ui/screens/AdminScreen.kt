@@ -40,9 +40,11 @@ import com.example.ui.components.StatMetricCard
 import com.example.ui.components.StudentDptResultCard
 import com.example.ui.components.decodeAttachmentBitmap
 import com.example.ui.components.formatInr
+import com.example.ui.components.printTeacherLoginGuidePdf
 import com.example.ui.components.readAttachmentFromUri
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.CraftAiImageState
+import kotlinx.coroutines.launch
 
 @Composable
 fun AdminScreen(
@@ -987,11 +989,79 @@ private fun AdminAccountsTab(
         }.sortedBy { it.role }
     }
 
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var isExportingGuide by remember { mutableStateOf(false) }
+
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = GoldSoft),
+                border = BorderStroke(1.dp, GoldAmber),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.PictureAsPdf,
+                        contentDescription = "Teacher Login PDF Guide",
+                        tint = NavyDeep,
+                        modifier = Modifier.size(28.dp),
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Teacher Login Guide (PDF)",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = NavyDeep,
+                        )
+                        Text(
+                            text = "Shareable step-by-step PDF with real campus photos & login screenshots",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NavyDeep.copy(alpha = 0.82f),
+                        )
+                    }
+                    Button(
+                        onClick = {
+                            if (!isExportingGuide) {
+                                scope.launch {
+                                    isExportingGuide = true
+                                    try {
+                                        printTeacherLoginGuidePdf(context)
+                                    } finally {
+                                        isExportingGuide = false
+                                    }
+                                }
+                            }
+                        },
+                        enabled = !isExportingGuide,
+                        colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("admin_teacher_login_guide_pdf_btn"),
+                    ) {
+                        if (isExportingGuide) {
+                            CircularProgressIndicator(
+                                color = GoldAmber,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        } else {
+                            Icon(Icons.Filled.Print, contentDescription = null, modifier = Modifier.size(18.dp))
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (isExportingGuide) "Preparing..." else "Save PDF")
+                    }
+                }
+            }
+        }
         item {
             Card(
                 shape = RoundedCornerShape(20.dp),

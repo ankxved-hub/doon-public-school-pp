@@ -2791,7 +2791,19 @@ function renderAdminPortal(tabIdx) {
 
     return el("div", { className: "item-list", style: { gap: "16px" } }, [
       el("section", { className: "card" }, [
-        el("div", { className: "section-title" }, [formTitle, cancelEditBtn]),
+        el("div", { className: "section-title" }, [
+          formTitle,
+          el("div", { className: "btn-row" }, [
+            el("a", {
+              href: "/teacher-guide.html",
+              target: "_blank",
+              rel: "noopener noreferrer",
+              className: "btn btn-outline btn-sm",
+              textContent: "Teacher Login Guide (PDF)",
+            }),
+            cancelEditBtn,
+          ]),
+        ]),
         el("form", {
           className: "form-grid",
           onSubmit: async (e) => {
