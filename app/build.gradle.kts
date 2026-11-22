@@ -11,7 +11,14 @@ plugins {
 
 android {
   namespace = "com.example"
-  compileSdk { version = release(36) { minorApiLevel = 1 } }
+  val sdkHome = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
+  val hasSdk361 = sdkHome != null && file("$sdkHome/platforms/android-36.1").exists()
+  val hasSdk36 = sdkHome != null && file("$sdkHome/platforms/android-36").exists()
+  if (!hasSdk361 && hasSdk36) {
+    compileSdk = 36
+  } else {
+    compileSdk { version = release(36) { minorApiLevel = 1 } }
+  }
 
   defaultConfig {
     applicationId = "com.aistudio.doonschool.dpsktq"

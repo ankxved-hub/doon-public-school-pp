@@ -23,29 +23,36 @@ jobs:
           distribution: 'temurin'
 
       - name: Setup Android SDK Command-Line Tools
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
 
-      - name: Install Android SDK 36.1 & Build Tools
+      - name: Install Android SDK 36.1 / 36 & Build Tools
         run: |
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          mkdir -p "$SDK_ROOT/licenses"
           SDKMANAGER="$(command -v sdkmanager || find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1)"
           if [ -z "$SDKMANAGER" ]; then
             echo "ERROR: sdkmanager not found under $SDK_ROOT"
             exit 1
           fi
 
-          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-          "$SDKMANAGER" --install "cmdline-tools;latest" >/dev/null 2>&1 || true
+          yes | "$SDKMANAGER" --licenses --sdk_root="$SDK_ROOT" >/dev/null 2>&1 || true
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "cmdline-tools;latest" >/dev/null 2>&1 || true
           if [ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
             SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           fi
 
-          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-          "$SDKMANAGER" --install "platform-tools" "platforms;android-36.1" "build-tools;36.0.0" || \
-            "$SDKMANAGER" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" || true
+          yes | "$SDKMANAGER" --licenses --sdk_root="$SDK_ROOT" >/dev/null 2>&1 || true
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platform-tools" "build-tools;36.0.0"
+
+          if ! "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platforms;android-36.1"; then
+            echo "platforms;android-36.1 unavailable in sdkmanager — installing stable platforms;android-36"
+            "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platforms;android-36"
+          fi
 
           echo "=== Installed SDK Platforms & Build Tools ==="
-          ls -la "$SDK_ROOT/platforms" "$SDK_ROOT/build-tools" || true
+          ls -la "$SDK_ROOT/platforms" "$SDK_ROOT/build-tools"
 
       - name: Setup Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
