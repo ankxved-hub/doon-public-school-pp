@@ -3,15 +3,27 @@
 const SCHOOL_INFO = {
   name: "Doon Public School, Etah",
   affiliation: "CBSE Affiliated (Nursery to Class XII)",
+  affiliationNo: "2133879",
   trust: "Managed by Murli Krishna Educational Trust",
   motto: "Where Excellence is a Habit! — Excelling with Legacy, Leading with Purpose",
-  address: "4th Milestone, Opposite PAC, Kasganj Road, Aruna Nagar, Etah – 207001 (U.P.)",
+  address: "Village Badaria / 4th Milestone, Opposite PAC, Etah–Kasganj Road, Aruna Nagar, Etah – 207001 (U.P.)",
   phones: "+91 76176 14471, +91 76176 14470",
   email: "doonpublicschooletah@gmail.com",
+  infoEmail: "doonetah.info@gmail.com",
+  website: "https://doonpublicschooletah.in",
   leadDeveloper: "Vedant Pratap Singh",
   coDevelopers: ["Dev Pratap Singh", "Ankur Kumar Gupta", "Naitik Yadav", "Advit Pratap"],
   mentors: ["Sudhakar Ojha Sir", "Uday Raj Sir", "Akash Sir"],
 };
+
+const SCHOOL_FACILITIES = [
+  { title: "Academic Campus Blocks", desc: "Dedicated Vivekananda, Dronacharya & Aryabhatta blocks surrounded by an expansive lush green campus." },
+  { title: "Smart Classrooms", desc: "Well-ventilated, digitally enabled classrooms spanning Doon Kidz (Nursery–UKG), Lower, Middle & Upper School." },
+  { title: "Science & Computer Labs", desc: "Fully equipped Physics, Chemistry, Biology & high-speed Computer Science/AI laboratories." },
+  { title: "Resource-Rich Library", desc: "Curated CBSE reference books, encyclopedias, periodicals, and guided reading space." },
+  { title: "Sports & Co-Curriculars", desc: "Spacious playground, indoor games, athletics, cultural houses, and holistic skill development." },
+  { title: "Safety, Hygiene & Transport", desc: "Separate sanitation blocks for boys & girls, fire & building safety compliance, and GPS school transport routes." },
+];
 
 const WINGS = [
   { name: "Doon Kidz", subtitle: "Pre-Primary Wing", label: "Nursery, LKG, UKG", classes: ["Nursery", "LKG", "UKG"] },
@@ -184,6 +196,7 @@ function clearNode(node) {
 const state = {
   booting: true,
   needsAdminSetup: false,
+  publicTab: "LOGIN",
   selectedRole: "STUDENT",
   darkMode: false,
   token: null,
@@ -194,6 +207,15 @@ const state = {
   adminUserSearch: "",
   adminRoleFilter: "",
   feeSearch: "",
+  feeClassFilter: "",
+  feeTargetScope: "CLASSES",
+  feeSelectedClasses: new Set(["Class II"]),
+  feeSectionFilter: "",
+  feeSelectedStudentIds: new Set(),
+  feeBillType: "BOTH",
+  feeMonth: "December 2026",
+  feeMiscTitle: "Exam & DPT Fee",
+  feeMiscAmount: "500",
   selectedFeeIds: new Set(),
   modal: null,
   isBusy: false,
@@ -234,6 +256,7 @@ async function refreshDashboard() {
     if (state.teacherFilterSection) params.set("section", state.teacherFilterSection);
   } else if (user?.role === "FEE_MANAGER") {
     if (state.feeSearch.trim()) params.set("search", state.feeSearch.trim());
+    if (state.feeClassFilter) params.set("className", state.feeClassFilter);
   }
   const qs = params.toString() ? `?${params.toString()}` : "";
   const data = await apiRequest(`/api/dashboard${qs}`);
@@ -457,21 +480,219 @@ function renderLoginScreen(root) {
         ]),
       ]);
 
+  let inqStudent = "";
+  let inqParent = "";
+  let inqPhone = "";
+  let inqClass = ALL_CLASSES[0];
+  let inqPrevSchool = "";
+  let inqNotes = "";
+  const inqAlert = el("div", { className: "alert", style: { display: "none" } });
+
+  const handleInquirySubmit = async (e) => {
+    e.preventDefault();
+    inqAlert.style.display = "none";
+    try {
+      const res = await apiRequest("/api/admission-inquiries", {
+        method: "POST",
+        body: JSON.stringify({
+          studentName: inqStudent,
+          parentName: inqParent,
+          phone: inqPhone,
+          applyingClass: inqClass,
+          previousSchool: inqPrevSchool,
+          notes: inqNotes,
+        }),
+      });
+      inqAlert.className = "alert alert-info";
+      inqAlert.textContent = res.message || "Admission inquiry submitted!";
+      inqAlert.style.display = "block";
+      showToast("Admission inquiry saved! School desk will contact you.");
+    } catch (err) {
+      inqAlert.className = "alert alert-error";
+      inqAlert.textContent = err.message;
+      inqAlert.style.display = "block";
+    }
+  };
+
+  const publicNavTabs = [
+    ["LOGIN", "ERP Portal Login"],
+    ["ADMISSIONS", "Admissions (Nursery–XII)"],
+    ["FACILITIES", "Campus & Facilities"],
+    ["DISCLOSURE", "CBSE Disclosure"],
+    ["CONTACT", "Contact School"],
+  ];
+
+  const publicBodyCard =
+    state.publicTab === "ADMISSIONS"
+      ? el("section", { className: "card" }, [
+          el("div", { className: "section-title" }, [
+            el("span", { textContent: "Online Admission Inquiry (Nursery to Class XII)" }),
+            el("span", { className: "pill pill-emerald", textContent: "Session Open" }),
+          ]),
+          el("p", {
+            style: { margin: "0 0 14px", fontSize: "0.9rem", color: "var(--text-muted)" },
+            textContent: "Submit an online admission inquiry for Doon Kidz (Nursery–UKG), Lower School (I–V), Middle School (VI–VIII), or Upper School (IX–XII). Inquiries go directly to the Principal's admission desk.",
+          }),
+          el("form", { className: "form-grid", onSubmit: handleInquirySubmit }, [
+            el("div", { className: "field" }, [
+              el("label", { textContent: "Student Full Name" }),
+              el("input", { className: "input", placeholder: "Child's full name", onInput: (e) => { inqStudent = e.target.value; } }),
+            ]),
+            el("div", { className: "field" }, [
+              el("label", { textContent: "Parent / Guardian Name" }),
+              el("input", { className: "input", placeholder: "Father / Mother name", onInput: (e) => { inqParent = e.target.value; } }),
+            ]),
+            el("div", { className: "field" }, [
+              el("label", { textContent: "Parent Mobile Number" }),
+              el("input", { className: "input", placeholder: "+91 98...", onInput: (e) => { inqPhone = e.target.value; } }),
+            ]),
+            el("div", { className: "field" }, [
+              el("label", { textContent: "Class Applying For" }),
+              el("select", { className: "select", onChange: (e) => { inqClass = e.target.value; } },
+                ALL_CLASSES.map((c) => el("option", { value: c, textContent: c }))
+              ),
+            ]),
+            el("div", { className: "field full" }, [
+              el("label", { textContent: "Previous School (if applicable)" }),
+              el("input", { className: "input", placeholder: "Optional previous school name", onInput: (e) => { inqPrevSchool = e.target.value; } }),
+            ]),
+            el("div", { className: "field full" }, [
+              el("label", { textContent: "Notes / Transport Requirement" }),
+              el("textarea", { className: "textarea", placeholder: "Optional questions or bus stop area...", onInput: (e) => { inqNotes = e.target.value; } }),
+            ]),
+            el("div", { className: "field full" }, [inqAlert]),
+            el("div", { className: "field full" }, [
+              el("button", { type: "submit", className: "btn btn-primary", textContent: "Submit Admission Inquiry" }),
+            ]),
+          ]),
+        ])
+      : state.publicTab === "FACILITIES"
+        ? el("section", { className: "card" }, [
+            el("div", { className: "section-title" }, [
+              el("span", { textContent: "Campus Infrastructure & Student Facilities" }),
+              el("span", { className: "pill pill-navy", textContent: "Etah–Kasganj Road" }),
+            ]),
+            el("div", { className: "facility-grid" },
+              SCHOOL_FACILITIES.map((f) =>
+                el("div", { className: "facility-card" }, [
+                  el("strong", { style: { display: "block", marginBottom: "4px" }, textContent: f.title }),
+                  el("div", { style: { fontSize: "0.86rem", color: "var(--text-muted)" }, textContent: f.desc }),
+                ])
+              )
+            ),
+          ])
+        : state.publicTab === "DISCLOSURE"
+          ? el("section", { className: "card" }, [
+              el("div", { className: "section-title" }, [
+                el("span", { textContent: "CBSE Mandatory Public Disclosure" }),
+                el("span", { className: "pill pill-gold", textContent: `Affiliation No: ${SCHOOL_INFO.affiliationNo}` }),
+              ]),
+              el("div", { className: "table-wrap" }, [
+                el("table", {}, [
+                  el("thead", {}, [el("tr", {}, [el("th", { textContent: "Particular" }), el("th", { textContent: "Official Information" })])]),
+                  el("tbody", {}, [
+                    el("tr", {}, [el("td", { textContent: "Name of the School" }), el("td", { textContent: SCHOOL_INFO.name })]),
+                    el("tr", {}, [el("td", { textContent: "CBSE Affiliation No." }), el("td", { textContent: `${SCHOOL_INFO.affiliationNo} (Senior Secondary up to Class XII)` })]),
+                    el("tr", {}, [el("td", { textContent: "Trust / Society" }), el("td", { textContent: SCHOOL_INFO.trust })]),
+                    el("tr", {}, [el("td", { textContent: "Campus Address" }), el("td", { textContent: SCHOOL_INFO.address })]),
+                    el("tr", {}, [el("td", { textContent: "Safety & Hygiene" }), el("td", { textContent: "Compliant building safety, fire NOC, drinking water, and separate boys/girls sanitation blocks" })]),
+                    el("tr", {}, [
+                      el("td", { textContent: "Official School Website" }),
+                      el("td", {}, [
+                        el("a", {
+                          href: SCHOOL_INFO.website,
+                          target: "_blank",
+                          rel: "noopener noreferrer",
+                          style: { color: "var(--navy-royal)", fontWeight: 700 },
+                          textContent: SCHOOL_INFO.website,
+                        }),
+                      ]),
+                    ]),
+                  ]),
+                ]),
+              ]),
+            ])
+          : state.publicTab === "CONTACT"
+            ? el("section", { className: "card" }, [
+                el("h3", { className: "section-title", textContent: "School Office & Admission Desk Contact" }),
+                el("div", { className: "item-list" }, [
+                  el("div", { className: "list-row" }, [
+                    el("div", {}, [
+                      el("strong", { textContent: "Campus Location" }),
+                      el("div", { style: { fontSize: "0.88rem", color: "var(--text-muted)" }, textContent: SCHOOL_INFO.address }),
+                    ]),
+                  ]),
+                  el("div", { className: "list-row" }, [
+                    el("div", {}, [
+                      el("strong", { textContent: "Phone Helpline" }),
+                      el("div", { style: { fontSize: "0.88rem", color: "var(--text-muted)" }, textContent: SCHOOL_INFO.phones }),
+                    ]),
+                  ]),
+                  el("div", { className: "list-row" }, [
+                    el("div", {}, [
+                      el("strong", { textContent: "Official Emails" }),
+                      el("div", { style: { fontSize: "0.88rem", color: "var(--text-muted)" }, textContent: `${SCHOOL_INFO.email} • ${SCHOOL_INFO.infoEmail}` }),
+                    ]),
+                  ]),
+                  el("div", { className: "list-row" }, [
+                    el("div", {}, [
+                      el("strong", { textContent: "Official Website" }),
+                      el("div", {}, [
+                        el("a", {
+                          href: SCHOOL_INFO.website,
+                          target: "_blank",
+                          rel: "noopener noreferrer",
+                          style: { color: "var(--navy-royal)", fontWeight: 700 },
+                          textContent: SCHOOL_INFO.website,
+                        }),
+                      ]),
+                    ]),
+                  ]),
+                ]),
+              ])
+            : mainCard;
+
   const wrapper = el("div", { className: "login-backdrop" }, [
     el("div", { className: "login-container" }, [
       el("header", { className: "hero-banner" }, [
+        el("img", {
+          src: "/campus-building.jpg",
+          alt: "Doon Public School, Etah Real Campus Building",
+          className: "hero-campus-photo",
+        }),
         el("div", { className: "hero-top" }, [
           el("div", { className: "crest-badge" }, [
-            el("img", { src: "/crest.svg", alt: "Doon Public School, Etah Crest" }),
+            el("img", { src: "/school-logo.png", alt: "Doon Public School, Etah Official Logo" }),
           ]),
-          el("div", {}, [
+          el("div", { style: { flex: 1 } }, [
             el("h1", { className: "hero-title", textContent: SCHOOL_INFO.name }),
             el("p", { className: "hero-motto", textContent: `“${SCHOOL_INFO.motto}”` }),
-            el("p", { className: "hero-meta", textContent: `${SCHOOL_INFO.affiliation} • ${SCHOOL_INFO.trust}` }),
+            el("p", { className: "hero-meta", textContent: `${SCHOOL_INFO.affiliation} (Aff. No. ${SCHOOL_INFO.affiliationNo}) • ${SCHOOL_INFO.trust}` }),
           ]),
+          el("a", {
+            href: SCHOOL_INFO.website,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            className: "btn btn-gold btn-sm",
+            style: { textDecoration: "none" },
+            textContent: "doonpublicschooletah.in",
+          }),
         ]),
       ]),
-      mainCard,
+      el("nav", { className: "public-nav", "aria-label": "School Website Sections" },
+        publicNavTabs.map(([key, label]) =>
+          el("button", {
+            type: "button",
+            className: `public-nav-btn ${state.publicTab === key ? "active" : ""}`,
+            onClick: () => {
+              state.publicTab = key;
+              render();
+            },
+            textContent: label,
+          })
+        )
+      ),
+      publicBodyCard,
       el("section", { className: "card card-navy" }, [
         el("div", { className: "eyebrow", style: { color: "var(--gold-amber)" }, textContent: "Official Academic Wings" }),
         el("div", { className: "item-list", style: { marginTop: "8px", gap: "6px" } },
@@ -1163,10 +1384,16 @@ function renderTeacherPortal(tabIdx) {
     ]),
   ]);
 
+  const teacherSubjects = String(teacher.subject || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const preferredSubject = teacherSubjects.find((s) => classSubs.includes(s)) || classSubs[0];
+
   if (tabIdx === 0) {
     // Daily DPT
     let date = todayIso();
-    let subject = classSubs.includes(teacher.subject) ? teacher.subject : classSubs[0];
+    let subject = preferredSubject;
     let assessmentType = "DPT";
     let held = "true";
     let topic = "";
@@ -1252,7 +1479,7 @@ function renderTeacherPortal(tabIdx) {
   if (tabIdx === 1) {
     // Weekly DPT Marks Entry
     let week = DPT_WEEKS[0];
-    let subject = classSubs.includes(teacher.subject) ? teacher.subject : classSubs[0];
+    let subject = preferredSubject;
     let maxMarks = 20;
     const scoresMap = {};
 
@@ -1766,86 +1993,331 @@ function renderFeeManagerPortal(tabIdx) {
   }
 
   if (tabIdx === 1) {
-    let targetStudentId = "ALL";
-    let feeHead = "Monthly Tuition Fee";
-    let month = "November 2026";
-    let customAmt = "2500";
     let searchText = state.feeSearch;
+    const studentById = new Map(students.map((st) => [st.id, st]));
+    const isAccountLocked = state.feeBillType !== "MISC";
+
+    const billTypeOptions = [
+      ["BOTH", "Monthly Account Bill (Tuition + Transport)"],
+      ["TUITION", "Monthly Tuition Fee Only (Account Rate)"],
+      ["TRANSPORT", "Transport / Bus Fee Only (Account Rate)"],
+      ["MISC", "Extra / Misc Fee (Exam / Annual Charge)"],
+    ];
+    const scopeOptions = [
+      ["CLASSES", "Select Classes"],
+      ["STUDENTS", "Select Students"],
+      ["ALL", "Entire School"],
+    ];
 
     return el("div", { className: "item-list", style: { gap: "16px" } }, [
       el("section", { className: "card" }, [
-        el("h3", { className: "section-title", textContent: "Assign Fee Demand (Bulk or Student)" }),
-        el("div", { className: "btn-row", style: { marginBottom: "12px" } }, [
-          el("input", { className: "input", style: { flex: 1 }, value: searchText, placeholder: "Search student by name or roll no...", onInput: (e) => { searchText = e.target.value; } }),
-          el("button", {
-            type: "button",
-            className: "btn btn-outline",
-            onClick: async () => {
-              state.feeSearch = searchText;
-              await refreshDashboard();
-              render();
-            },
-            textContent: "Search",
-          }),
+        el("h3", { className: "section-title" }, [
+          el("span", { textContent: "Trigger Fee Bill (Account-Locked Rates)" }),
+          el("span", { className: "pill pill-emerald", textContent: "Account Fee Truth" }),
         ]),
+        el("p", {
+          style: { margin: "0 0 12px", fontSize: "0.86rem", color: "var(--text-muted)" },
+          textContent: "Target as many classes or students as needed and trigger the bill. Tuition & Transport fees are automatically pulled from each student's saved Account record — students only pay the true amount stored in their account.",
+        }),
+
+        el("div", { className: "eyebrow", style: { marginBottom: "6px" }, textContent: "1. Who to Target" }),
+        el("div", { className: "btn-row", style: { marginBottom: "12px", flexWrap: "wrap" } },
+          scopeOptions.map(([key, label]) =>
+            el("button", {
+              type: "button",
+              className: `btn btn-sm ${state.feeTargetScope === key ? "btn-primary" : "btn-outline"}`,
+              onClick: () => {
+                state.feeTargetScope = key;
+                render();
+              },
+              textContent: label,
+            })
+          )
+        ),
+
+        state.feeTargetScope === "CLASSES"
+          ? el("div", { className: "card card-compact", style: { background: "var(--surface-alt)", marginBottom: "14px" } }, [
+              el("div", { className: "section-title", style: { marginBottom: "8px" } }, [
+                el("span", { style: { fontSize: "0.9rem" }, textContent: `Selected Classes (${state.feeSelectedClasses.size})` }),
+                el("div", { className: "btn-row" }, [
+                  el("button", {
+                    type: "button",
+                    className: "btn btn-outline btn-sm",
+                    onClick: () => {
+                      ALL_CLASSES.forEach((c) => state.feeSelectedClasses.add(c));
+                      render();
+                    },
+                    textContent: "Select All",
+                  }),
+                  el("button", {
+                    type: "button",
+                    className: "btn btn-outline btn-sm",
+                    onClick: () => {
+                      state.feeSelectedClasses.clear();
+                      render();
+                    },
+                    textContent: "Clear",
+                  }),
+                ]),
+              ]),
+              el("div", { className: "btn-row", style: { flexWrap: "wrap", gap: "6px", marginBottom: "10px" } },
+                ALL_CLASSES.map((cls) => {
+                  const active = state.feeSelectedClasses.has(cls);
+                  return el("button", {
+                    type: "button",
+                    className: `btn btn-sm ${active ? "btn-gold" : "btn-outline"}`,
+                    onClick: () => {
+                      if (active) state.feeSelectedClasses.delete(cls);
+                      else state.feeSelectedClasses.add(cls);
+                      render();
+                    },
+                    textContent: cls,
+                  });
+                })
+              ),
+              el("div", { className: "field" }, [
+                el("label", { textContent: "Optional Section Filter" }),
+                el("select", {
+                  className: "select",
+                  onChange: (e) => {
+                    state.feeSectionFilter = e.target.value;
+                  },
+                }, [
+                  el("option", { value: "", selected: state.feeSectionFilter === "", textContent: "All Sections (A, B, C)" }),
+                  ...SECTIONS.map((sec) => el("option", { value: sec, selected: state.feeSectionFilter === sec, textContent: `Section ${sec} Only` })),
+                ]),
+              ]),
+            ])
+          : null,
+
+        state.feeTargetScope === "STUDENTS"
+          ? el("div", { className: "card card-compact", style: { background: "var(--surface-alt)", marginBottom: "14px" } }, [
+              el("div", { className: "btn-row", style: { marginBottom: "10px", flexWrap: "wrap" } }, [
+                el("input", {
+                  className: "input",
+                  style: { flex: 1, minWidth: "180px" },
+                  value: searchText,
+                  placeholder: "Search student by name, roll no, or class...",
+                  onInput: (e) => { searchText = e.target.value; },
+                }),
+                el("select", {
+                  className: "select",
+                  style: { width: "auto" },
+                  onChange: async (e) => {
+                    state.feeClassFilter = e.target.value;
+                    await refreshDashboard();
+                    render();
+                  },
+                }, [
+                  el("option", { value: "", selected: state.feeClassFilter === "", textContent: "All Classes" }),
+                  ...ALL_CLASSES.map((c) => el("option", { value: c, selected: state.feeClassFilter === c, textContent: c })),
+                ]),
+                el("button", {
+                  type: "button",
+                  className: "btn btn-outline btn-sm",
+                  onClick: async () => {
+                    state.feeSearch = searchText;
+                    await refreshDashboard();
+                    render();
+                  },
+                  textContent: "Search",
+                }),
+              ]),
+              el("div", { className: "section-title", style: { marginBottom: "8px" } }, [
+                el("span", { style: { fontSize: "0.86rem" }, textContent: `Selected Students: ${state.feeSelectedStudentIds.size} (Loaded: ${students.length})` }),
+                el("div", { className: "btn-row" }, [
+                  el("button", {
+                    type: "button",
+                    className: "btn btn-outline btn-sm",
+                    onClick: () => {
+                      students.forEach((st) => state.feeSelectedStudentIds.add(st.id));
+                      render();
+                    },
+                    textContent: "Select Loaded",
+                  }),
+                  el("button", {
+                    type: "button",
+                    className: "btn btn-outline btn-sm",
+                    onClick: () => {
+                      state.feeSelectedStudentIds.clear();
+                      render();
+                    },
+                    textContent: "Clear",
+                  }),
+                ]),
+              ]),
+              el("div", { className: "item-list", style: { maxHeight: "260px", overflowY: "auto" } },
+                students.length === 0
+                  ? [el("p", { style: { color: "var(--text-muted)" }, textContent: "No matching students loaded. Try searching above." })]
+                  : students.map((st) =>
+                      el("label", { className: "list-row", style: { cursor: "pointer" } }, [
+                        el("div", { className: "btn-row" }, [
+                          el("input", {
+                            type: "checkbox",
+                            checked: state.feeSelectedStudentIds.has(st.id),
+                            onChange: (e) => {
+                              if (e.target.checked) state.feeSelectedStudentIds.add(st.id);
+                              else state.feeSelectedStudentIds.delete(st.id);
+                              render();
+                            },
+                          }),
+                          el("div", {}, [
+                            el("strong", { textContent: `${st.fullName} (Roll ${st.userId})` }),
+                            el("div", { style: { fontSize: "0.78rem", color: "var(--text-muted)" }, textContent: `${st.className}-${st.section} • Parent: ${st.parentName || "—"}` }),
+                          ]),
+                        ]),
+                        el("span", { className: "pill pill-navy", textContent: `Tuition ₹${st.monthlyTuition || 0} • Bus ₹${st.transportFee || 0}` }),
+                      ])
+                    )
+              ),
+            ])
+          : null,
+
+        state.feeTargetScope === "ALL"
+          ? el("div", { className: "alert", style: { background: "var(--surface-alt)", border: "1px solid var(--gold-amber)", marginBottom: "14px" } }, [
+              el("strong", { textContent: "Entire School Selected: " }),
+              "All enrolled students across Nursery to Class XII will be billed using each student's own saved Account Tuition & Transport fee.",
+            ])
+          : null,
+
         el("form", {
           className: "form-grid",
           onSubmit: async (e) => {
             e.preventDefault();
-            const targets = targetStudentId === "ALL" ? students : students.filter((s) => s.id === targetStudentId);
-            const items = targets
-              .map((st) => {
-                let amt = Number(customAmt || 0);
-                if (targetStudentId === "ALL") {
-                  if (feeHead === "Monthly Tuition Fee" && st.monthlyTuition > 0) amt = st.monthlyTuition;
-                  if (feeHead === "Transport / Bus Fee") amt = st.transportFee;
-                }
-                return { studentDocId: st.id, title: `${feeHead} (${month})`, month, amount: amt };
-              })
-              .filter((x) => x.amount > 0);
-            if (items.length === 0) {
-              showToast("No valid positive fee amounts to assign.");
-              return;
+            try {
+              const payload = {
+                scope: state.feeTargetScope,
+                classes: Array.from(state.feeSelectedClasses),
+                section: state.feeSectionFilter,
+                studentDocIds: Array.from(state.feeSelectedStudentIds),
+                billType: state.feeBillType,
+                month: state.feeMonth.trim(),
+              };
+              if (state.feeBillType === "MISC") {
+                payload.miscTitle = state.feeMiscTitle.trim();
+                payload.miscAmount = Number(state.feeMiscAmount || 0);
+              }
+              const res = await apiRequest("/api/fee-bills", {
+                method: "POST",
+                body: JSON.stringify(payload),
+              });
+              await refreshDashboard();
+              showToast(
+                res.itemsCreated > 0
+                  ? `Billed ${res.itemsCreated} fee head(s) across ${res.studentsBilled} student(s) (${res.skippedDuplicates} duplicates skipped).`
+                  : `0 new bills created (${res.skippedDuplicates} already billed for ${state.feeMonth}, or ₹0 account fee).`
+              );
+              render();
+            } catch (err) {
+              showToast(err.message);
             }
-            const res = await apiRequest("/api/fee-items", { method: "POST", body: JSON.stringify({ items }) });
-            await refreshDashboard();
-            showToast(`Assigned fee demand to ${res.count} student(s).`);
-            render();
           },
         }, [
           el("div", { className: "field" }, [
-            el("label", { textContent: "Target Student(s)" }),
-            el("select", { className: "select", onChange: (e) => { targetStudentId = e.target.value; } }, [
-              el("option", { value: "ALL", textContent: `All Loaded Students (${students.length})` }),
-              ...students.map((st) => el("option", { value: st.id, textContent: `${st.fullName} (Roll ${st.userId} • ${st.className}-${st.section})` })),
-            ]),
-          ]),
-          el("div", { className: "field" }, [
-            el("label", { textContent: "Fee Head" }),
-            el("select", { className: "select", onChange: (e) => { feeHead = e.target.value; } },
-              ["Monthly Tuition Fee", "Transport / Bus Fee", "Exam Fee", "Annual / Lab Fee"].map((h) => el("option", { value: h, textContent: h }))
-            ),
+            el("label", { textContent: "Bill Type" }),
+            el("select", {
+              className: "select",
+              onChange: (e) => {
+                state.feeBillType = e.target.value;
+                render();
+              },
+            }, billTypeOptions.map(([k, lbl]) => el("option", { value: k, selected: state.feeBillType === k, textContent: lbl }))),
           ]),
           el("div", { className: "field" }, [
             el("label", { textContent: "Billing Month / Term" }),
-            el("input", { className: "input", value: month, onInput: (e) => { month = e.target.value; } }),
+            el("input", {
+              className: "input",
+              value: state.feeMonth,
+              onInput: (e) => { state.feeMonth = e.target.value; },
+            }),
           ]),
-          el("div", { className: "field" }, [
-            el("label", { textContent: "Default / Custom Amount (₹)" }),
-            el("input", { className: "input", type: "number", value: customAmt, onInput: (e) => { customAmt = e.target.value; } }),
-          ]),
+          !isAccountLocked
+            ? el("div", { className: "field" }, [
+                el("label", { textContent: "Extra Fee Title" }),
+                el("input", {
+                  className: "input",
+                  value: state.feeMiscTitle,
+                  placeholder: "e.g. Exam & DPT Fee / Annual Charges",
+                  onInput: (e) => { state.feeMiscTitle = e.target.value; },
+                }),
+              ])
+            : null,
+          !isAccountLocked
+            ? el("div", { className: "field" }, [
+                el("label", { textContent: "Extra Fee Amount (₹)" }),
+                el("input", {
+                  className: "input",
+                  type: "number",
+                  value: state.feeMiscAmount,
+                  onInput: (e) => { state.feeMiscAmount = e.target.value; },
+                }),
+              ])
+            : el("div", {
+                className: "field full",
+                style: {
+                  background: "var(--surface-alt)",
+                  padding: "10px 12px",
+                  borderRadius: "10px",
+                  borderLeft: "4px solid var(--emerald)",
+                  fontSize: "0.86rem",
+                },
+              }, [
+                el("strong", { textContent: "Account-Locked Fee Protection: " }),
+                "No manual amount can override Tuition or Transport here. The server reads each targeted student's saved Account Tuition & Transport fees directly from D1 and skips duplicates for the same month.",
+              ]),
           el("div", { className: "field full" }, [
-            el("button", { type: "submit", className: "btn btn-primary", textContent: "Assign Fee Demand" }),
+            el("button", {
+              type: "submit",
+              className: "btn btn-primary",
+              textContent:
+                state.feeTargetScope === "CLASSES"
+                  ? `Trigger Fee Bill for Selected Classes (${state.feeSelectedClasses.size})`
+                  : state.feeTargetScope === "STUDENTS"
+                    ? `Trigger Fee Bill for Selected Students (${state.feeSelectedStudentIds.size})`
+                    : "Trigger Fee Bill for Entire School",
+            }),
           ]),
         ]),
       ]),
+
+      el("section", { className: "card" }, [
+        el("div", { className: "section-title" }, [
+          el("span", { textContent: `Student Account Fee Rates (${students.length} loaded)` }),
+          el("select", {
+            className: "select",
+            style: { width: "auto" },
+            onChange: async (e) => {
+              state.feeClassFilter = e.target.value;
+              await refreshDashboard();
+              render();
+            },
+          }, [
+            el("option", { value: "", selected: state.feeClassFilter === "", textContent: "Filter: All Classes" }),
+            ...ALL_CLASSES.map((c) => el("option", { value: c, selected: state.feeClassFilter === c, textContent: c })),
+          ]),
+        ]),
+        el("div", { className: "item-list" },
+          students.slice(0, 40).map((st) =>
+            el("div", { className: "list-row" }, [
+              el("div", {}, [
+                el("strong", { textContent: `${st.fullName} (Roll ${st.userId})` }),
+                el("div", { style: { fontSize: "0.8rem", color: "var(--text-muted)" }, textContent: `${st.className}-${st.section} • Parent: ${st.parentName || "—"}` }),
+              ]),
+              el("span", { className: "pill pill-navy", textContent: `Tuition ₹${st.monthlyTuition || 0} • Bus ₹${st.transportFee || 0}` }),
+            ])
+          )
+        ),
+      ]),
+
       el("section", { className: "card" }, [
         el("h3", { className: "section-title", textContent: `Recent Fee Ledger (${feeItems.length})` }),
         el("div", { className: "item-list" },
-          feeItems.slice(0, 40).map((f) =>
-            el("div", { className: "list-row" }, [
+          feeItems.slice(0, 40).map((f) => {
+            const stId = pick(f, "studentDocId", "student_doc_id", "");
+            const st = studentById.get(stId);
+            return el("div", { className: "list-row" }, [
               el("div", {}, [
-                el("strong", { textContent: f.title }),
+                el("strong", { textContent: st ? `${st.fullName} (${st.className}-${st.section}) — ${f.title}` : f.title }),
                 el("div", { style: { fontSize: "0.8rem", color: "var(--text-muted)" }, textContent: `${f.month} • ₹${f.amount}` }),
               ]),
               el("div", { className: "btn-row" }, [
@@ -1864,8 +2336,8 @@ function renderFeeManagerPortal(tabIdx) {
                     })
                   : null,
               ]),
-            ])
-          )
+            ]);
+          })
         ),
       ]),
     ]);
@@ -2041,112 +2513,297 @@ function renderAdminPortal(tabIdx) {
             )
           : null,
       ]),
+      el("section", { className: "card" }, [
+        el("h3", { className: "section-title", textContent: `Online Admission Inquiries (${(d.admissionInquiries || []).length})` }),
+        el("div", { className: "item-list" },
+          (d.admissionInquiries || []).length === 0
+            ? [el("p", { style: { color: "var(--text-muted)" }, textContent: "No parent admission inquiries submitted yet." })]
+            : (d.admissionInquiries || []).map((inq) => {
+                const stName = pick(inq, "studentName", "student_name");
+                const pName = pick(inq, "parentName", "parent_name");
+                const cls = pick(inq, "applyingClass", "applying_class");
+                const prev = pick(inq, "previousSchool", "previous_school");
+                return el("div", { className: "list-row" }, [
+                  el("div", { style: { flex: 1, minWidth: "220px" } }, [
+                    el("strong", { textContent: `${stName} → Applying for ${cls}` }),
+                    el("div", { style: { fontSize: "0.82rem", color: "var(--text-muted)" }, textContent: `Parent: ${pName} • Ph: ${inq.phone}${prev ? ` • Prev: ${prev}` : ""}` }),
+                    inq.notes ? el("div", { style: { fontSize: "0.82rem", marginTop: "3px" }, textContent: inq.notes }) : null,
+                  ]),
+                  el("div", { className: "btn-row" }, [
+                    el("span", { className: `pill ${inq.status === "ENROLLED" ? "pill-emerald" : inq.status === "CONTACTED" ? "pill-gold" : "pill-navy"}`, textContent: inq.status }),
+                    inq.status !== "CONTACTED"
+                      ? el("button", {
+                          type: "button",
+                          className: "btn btn-outline btn-sm",
+                          onClick: async () => {
+                            await apiRequest(`/api/admission-inquiries/${encodeURIComponent(inq.id)}`, { method: "PUT", body: JSON.stringify({ status: "CONTACTED" }) });
+                            await refreshDashboard();
+                            showToast("Marked Contacted.");
+                            render();
+                          },
+                          textContent: "Contacted",
+                        })
+                      : null,
+                    inq.status !== "ENROLLED"
+                      ? el("button", {
+                          type: "button",
+                          className: "btn btn-emerald btn-sm",
+                          onClick: async () => {
+                            await apiRequest(`/api/admission-inquiries/${encodeURIComponent(inq.id)}`, { method: "PUT", body: JSON.stringify({ status: "ENROLLED" }) });
+                            await refreshDashboard();
+                            showToast("Marked Enrolled!");
+                            render();
+                          },
+                          textContent: "Enrolled",
+                        })
+                      : null,
+                    el("button", {
+                      type: "button",
+                      className: "btn btn-rose btn-sm",
+                      onClick: async () => {
+                        await apiRequest(`/api/admission-inquiries/${encodeURIComponent(inq.id)}`, { method: "DELETE" });
+                        await refreshDashboard();
+                        showToast("Inquiry deleted.");
+                        render();
+                      },
+                      textContent: "Delete",
+                    }),
+                  ]),
+                ]);
+              })
+        ),
+      ]),
     ]);
   }
 
   if (tabIdx === 1) {
-    // Accounts Manager (Students auto roll 001..., Teachers, Fee Managers, Admins)
+    // Accounts Manager (Students auto roll 001..., Multi-Role Teachers, Fee Managers, Admins)
+    let editingUserId = "";
     let newRole = "STUDENT";
+    const extraRolesSet = new Set();
     let newFullName = "";
     let newUserId = "";
     let newPhone = "";
     let newPassword = "";
     let newClass = "Class I";
     let newSection = "A";
-    let newSubject = ALL_SUBJECTS[0];
+    const selectedSubjectsSet = new Set([ALL_SUBJECTS[0]]);
+    let customSubjectText = "";
     let newParent = "";
     let newTuition = "2500";
     let newTransport = "900";
     let searchVal = state.adminUserSearch;
     let roleVal = state.adminRoleFilter;
 
+    const formTitle = el("h3", { className: "section-title", textContent: "Create School Account" });
+    const cancelEditBtn = el("button", {
+      type: "button",
+      className: "btn btn-outline btn-sm",
+      style: { display: "none" },
+      textContent: "Cancel Edit",
+    });
+    const roleSelect = el(
+      "select",
+      { className: "select" },
+      ["STUDENT", "TEACHER", "FEE_MANAGER", "ADMIN"].map((r) =>
+        el("option", { value: r, textContent: r.replace("_", " ") })
+      )
+    );
+    const fullNameInput = el("input", { className: "input", placeholder: "Full Name", onInput: (e) => { newFullName = e.target.value; } });
+    const userIdInput = el("input", { className: "input", placeholder: "e.g. TCH101 / FEE201 or leave blank", onInput: (e) => { newUserId = e.target.value; } });
+    const passwordInput = el("input", { className: "input", type: "password", placeholder: "Min 4 chars (blank on edit keeps existing)", onInput: (e) => { newPassword = e.target.value; } });
+    const classSelect = el("select", { className: "select", onChange: (e) => { newClass = e.target.value; } },
+      ALL_CLASSES.map((c) => el("option", { value: c, textContent: c }))
+    );
+    const sectionSelect = el("select", { className: "select", onChange: (e) => { newSection = e.target.value; } },
+      SECTIONS.map((s) => el("option", { value: s, textContent: s }))
+    );
+    const phoneInput = el("input", { className: "input", placeholder: "+91...", onInput: (e) => { newPhone = e.target.value; } });
+    const parentInput = el("input", { className: "input", placeholder: "Guardian Name", onInput: (e) => { newParent = e.target.value; } });
+    const tuitionInput = el("input", { className: "input", style: { flex: 1 }, type: "number", value: newTuition, onInput: (e) => { newTuition = e.target.value; } });
+    const transportInput = el("input", { className: "input", style: { flex: 1 }, type: "number", value: newTransport, onInput: (e) => { newTransport = e.target.value; } });
+    const submitBtn = el("button", { type: "submit", className: "btn btn-primary", textContent: "Create Account in Cloud" });
+
+    const feeMgrCheckbox = el("input", {
+      type: "checkbox",
+      onChange: (e) => {
+        if (e.target.checked) extraRolesSet.add("FEE_MANAGER");
+        else extraRolesSet.delete("FEE_MANAGER");
+      },
+    });
+    const adminCheckbox = el("input", {
+      type: "checkbox",
+      onChange: (e) => {
+        if (e.target.checked) extraRolesSet.add("ADMIN");
+        else extraRolesSet.delete("ADMIN");
+      },
+    });
+
+    const teacherExtraRolesBox = el("div", { className: "field full", style: { display: "none" } }, [
+      el("label", { textContent: "Teacher Multi-Role Access (Select Extra Roles if needed)" }),
+      el("div", { className: "btn-row", style: { flexWrap: "wrap", gap: "10px", padding: "10px", border: "1px solid var(--border)", borderRadius: "10px", background: "var(--surface-alt)" } }, [
+        el("span", { className: "pill pill-navy", textContent: "Teacher (Primary)" }),
+        el("label", { style: { display: "inline-flex", alignItems: "center", gap: "6px", cursor: "pointer", fontWeight: 600, fontSize: "0.88rem" } }, [
+          feeMgrCheckbox,
+          "Fee Manager (Accounts)",
+        ]),
+        el("label", { style: { display: "inline-flex", alignItems: "center", gap: "6px", cursor: "pointer", fontWeight: 600, fontSize: "0.88rem" } }, [
+          adminCheckbox,
+          "Principal / Admin",
+        ]),
+      ]),
+    ]);
+
+    const subjectCheckboxes = [];
+    const customSubInput = el("input", {
+      className: "input",
+      placeholder: "Optional extra subject(s), comma-separated",
+      onInput: (e) => { customSubjectText = e.target.value; },
+    });
+    const teacherSubjectsBox = el("div", { className: "field full", style: { display: "none" } }, [
+      el("label", { textContent: "Teaching Subject(s) — Select one or more" }),
+      el("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px", maxHeight: "145px", overflowY: "auto", padding: "8px", border: "1px solid var(--border)", borderRadius: "10px", background: "var(--surface-alt)", marginBottom: "6px" } },
+        ALL_SUBJECTS.map((sub) => {
+          const cb = el("input", {
+            type: "checkbox",
+            checked: selectedSubjectsSet.has(sub),
+            onChange: (e) => {
+              if (e.target.checked) selectedSubjectsSet.add(sub);
+              else selectedSubjectsSet.delete(sub);
+            },
+          });
+          subjectCheckboxes.push({ sub, cb });
+          return el("label", { style: { display: "inline-flex", alignItems: "center", gap: "5px", padding: "4px 8px", borderRadius: "999px", border: "1px solid var(--border)", background: "var(--surface)", fontSize: "0.8rem", cursor: "pointer" } }, [
+            cb,
+            sub,
+          ]);
+        })
+      ),
+      customSubInput,
+    ]);
+
+    const classField = el("div", { className: "field" }, [
+      el("label", { textContent: "Class (Students / Teachers)" }),
+      classSelect,
+    ]);
+    const sectionField = el("div", { className: "field" }, [
+      el("label", { textContent: "Section" }),
+      sectionSelect,
+    ]);
+    const parentField = el("div", { className: "field" }, [
+      el("label", { textContent: "Parent Name (if Student)" }),
+      parentInput,
+    ]);
+    const feesField = el("div", { className: "field" }, [
+      el("label", { textContent: "Monthly Tuition / Transport (₹)" }),
+      el("div", { className: "btn-row" }, [tuitionInput, transportInput]),
+    ]);
+
+    function syncRoleVisibility() {
+      const isTeacher = newRole === "TEACHER";
+      const isStudent = newRole === "STUDENT";
+      teacherExtraRolesBox.style.display = isTeacher ? "" : "none";
+      teacherSubjectsBox.style.display = isTeacher ? "" : "none";
+      classField.style.display = isTeacher || isStudent ? "" : "none";
+      sectionField.style.display = isTeacher || isStudent ? "" : "none";
+      parentField.style.display = isStudent ? "" : "none";
+      feesField.style.display = isStudent ? "" : "none";
+      submitBtn.textContent = editingUserId ? "Save Account Changes" : "Create Account in Cloud";
+      cancelEditBtn.style.display = editingUserId ? "" : "none";
+      formTitle.textContent = editingUserId ? `Edit Account (${newUserId})` : "Create School Account";
+    }
+
+    function resetAccountForm() {
+      editingUserId = "";
+      newRole = "STUDENT";
+      roleSelect.value = "STUDENT";
+      extraRolesSet.clear();
+      feeMgrCheckbox.checked = false;
+      adminCheckbox.checked = false;
+      newFullName = "";
+      fullNameInput.value = "";
+      newUserId = "";
+      userIdInput.value = "";
+      newPassword = "";
+      passwordInput.value = "";
+      newPhone = "";
+      phoneInput.value = "";
+      newParent = "";
+      parentInput.value = "";
+      customSubjectText = "";
+      customSubInput.value = "";
+      selectedSubjectsSet.clear();
+      selectedSubjectsSet.add(ALL_SUBJECTS[0]);
+      subjectCheckboxes.forEach(({ sub, cb }) => { cb.checked = selectedSubjectsSet.has(sub); });
+      syncRoleVisibility();
+    }
+
+    roleSelect.addEventListener("change", (e) => {
+      newRole = e.target.value;
+      if (newRole !== "TEACHER") {
+        extraRolesSet.clear();
+        feeMgrCheckbox.checked = false;
+        adminCheckbox.checked = false;
+      }
+      syncRoleVisibility();
+    });
+    cancelEditBtn.addEventListener("click", resetAccountForm);
+    syncRoleVisibility();
+
     return el("div", { className: "item-list", style: { gap: "16px" } }, [
       el("section", { className: "card" }, [
-        el("h3", { className: "section-title", textContent: "Create School Account" }),
+        el("div", { className: "section-title" }, [formTitle, cancelEditBtn]),
         el("form", {
           className: "form-grid",
           onSubmit: async (e) => {
             e.preventDefault();
             try {
+              const combinedSubjects = [
+                ...selectedSubjectsSet,
+                ...customSubjectText.split(",").map((s) => s.trim()).filter(Boolean),
+              ];
+              const uniqueSubjects = [...new Set(combinedSubjects)].join(", ");
+              const payload = {
+                role: newRole,
+                extraRoles: newRole === "TEACHER" ? [...extraRolesSet] : [],
+                fullName: newFullName,
+                userId: newUserId.trim(),
+                phone: newPhone,
+                password: newPassword,
+                wing: newRole === "STUDENT" || newRole === "TEACHER" ? wingForClass(newClass) : "All Wings",
+                className: newRole === "STUDENT" || newRole === "TEACHER" ? newClass : "",
+                section: newRole === "STUDENT" || newRole === "TEACHER" ? newSection : "",
+                subject: newRole === "TEACHER" ? uniqueSubjects : "",
+                parentName: newRole === "STUDENT" ? newParent : "",
+                monthlyTuition: Number(newTuition || 0),
+                transportFee: Number(newTransport || 0),
+              };
+              if (editingUserId) payload.id = editingUserId;
               const res = await apiRequest("/api/users", {
                 method: "POST",
-                body: JSON.stringify({
-                  role: newRole,
-                  fullName: newFullName,
-                  userId: newUserId.trim(),
-                  phone: newPhone,
-                  password: newPassword,
-                  wing: newRole === "STUDENT" || newRole === "TEACHER" ? wingForClass(newClass) : "All Wings",
-                  className: newRole === "STUDENT" || newRole === "TEACHER" ? newClass : "",
-                  section: newRole === "STUDENT" || newRole === "TEACHER" ? newSection : "",
-                  subject: newRole === "TEACHER" ? newSubject : "",
-                  parentName: newRole === "STUDENT" ? newParent : "",
-                  monthlyTuition: Number(newTuition || 0),
-                  transportFee: Number(newTransport || 0),
-                }),
+                body: JSON.stringify(payload),
               });
               await refreshDashboard();
-              showToast(`Account created: ${res.user.fullName} (ID: ${res.user.userId})`);
+              const roleBadge = (res.user.roles || [res.user.role]).join(" + ");
+              showToast(`Account saved: ${res.user.fullName} (${res.user.userId}) • ${roleBadge}`);
               render();
             } catch (err) {
               showToast(err.message);
             }
           },
         }, [
-          el("div", { className: "field" }, [
-            el("label", { textContent: "Role" }),
-            el("select", { className: "select", onChange: (e) => { newRole = e.target.value; } },
-              ["STUDENT", "TEACHER", "FEE_MANAGER", "ADMIN"].map((r) => el("option", { value: r, textContent: r.replace("_", " ") }))
-            ),
-          ]),
-          el("div", { className: "field" }, [
-            el("label", { textContent: "Full Name" }),
-            el("input", { className: "input", placeholder: "Full Name", onInput: (e) => { newFullName = e.target.value; } }),
-          ]),
-          el("div", { className: "field" }, [
-            el("label", { textContent: "User / Roll ID (blank for Student = auto 001...)" }),
-            el("input", { className: "input", placeholder: "e.g. TCH101 / FEE201 or leave blank", onInput: (e) => { newUserId = e.target.value; } }),
-          ]),
-          el("div", { className: "field" }, [
-            el("label", { textContent: "Password" }),
-            el("input", { className: "input", type: "password", placeholder: "Min 4 characters", onInput: (e) => { newPassword = e.target.value; } }),
-          ]),
-          el("div", { className: "field" }, [
-            el("label", { textContent: "Class (Students / Teachers)" }),
-            el("select", { className: "select", onChange: (e) => { newClass = e.target.value; } },
-              ALL_CLASSES.map((c) => el("option", { value: c, textContent: c }))
-            ),
-          ]),
-          el("div", { className: "field" }, [
-            el("label", { textContent: "Section" }),
-            el("select", { className: "select", onChange: (e) => { newSection = e.target.value; } },
-              SECTIONS.map((s) => el("option", { value: s, textContent: s }))
-            ),
-          ]),
-          el("div", { className: "field" }, [
-            el("label", { textContent: "Teacher Subject (if Teacher)" }),
-            el("select", { className: "select", onChange: (e) => { newSubject = e.target.value; } },
-              ALL_SUBJECTS.map((s) => el("option", { value: s, textContent: s }))
-            ),
-          ]),
-          el("div", { className: "field" }, [
-            el("label", { textContent: "Phone Number" }),
-            el("input", { className: "input", placeholder: "+91...", onInput: (e) => { newPhone = e.target.value; } }),
-          ]),
-          el("div", { className: "field" }, [
-            el("label", { textContent: "Parent Name (if Student)" }),
-            el("input", { className: "input", placeholder: "Guardian Name", onInput: (e) => { newParent = e.target.value; } }),
-          ]),
-          el("div", { className: "field" }, [
-            el("label", { textContent: "Monthly Tuition / Transport (₹)" }),
-            el("div", { className: "btn-row" }, [
-              el("input", { className: "input", style: { flex: 1 }, type: "number", value: newTuition, onInput: (e) => { newTuition = e.target.value; } }),
-              el("input", { className: "input", style: { flex: 1 }, type: "number", value: newTransport, onInput: (e) => { newTransport = e.target.value; } }),
-            ]),
-          ]),
-          el("div", { className: "field full" }, [
-            el("button", { type: "submit", className: "btn btn-primary", textContent: "Create Account in Cloud" }),
-          ]),
+          el("div", { className: "field" }, [el("label", { textContent: "Primary Role" }), roleSelect]),
+          el("div", { className: "field" }, [el("label", { textContent: "Full Name" }), fullNameInput]),
+          el("div", { className: "field" }, [el("label", { textContent: "User / Roll ID (blank for Student = auto 001...)" }), userIdInput]),
+          el("div", { className: "field" }, [el("label", { textContent: "Password" }), passwordInput]),
+          teacherExtraRolesBox,
+          classField,
+          sectionField,
+          teacherSubjectsBox,
+          el("div", { className: "field" }, [el("label", { textContent: "Phone Number" }), phoneInput]),
+          parentField,
+          feesField,
+          el("div", { className: "field full" }, [submitBtn]),
         ]),
       ]),
       el("section", { className: "card" }, [
@@ -2170,27 +2827,79 @@ function renderAdminPortal(tabIdx) {
           }),
         ]),
         el("div", { className: "item-list" },
-          users.map((u) =>
-            el("div", { className: "list-row" }, [
+          users.map((u) => {
+            const rolesList = u.roles && u.roles.length > 0 ? u.roles : [u.role];
+            const roleLabel = rolesList.map((r) => r.replace("_", " ")).join(" + ");
+            return el("div", { className: "list-row" }, [
               el("div", {}, [
                 el("strong", { textContent: `${u.fullName} (${u.userId})` }),
-                el("div", { style: { fontSize: "0.82rem", color: "var(--text-muted)" }, textContent: `${u.role} • ${u.className ? `${u.className}-${u.section}` : u.wing} ${u.subject ? `• ${u.subject}` : ""}` }),
+                el("div", { style: { fontSize: "0.82rem", color: "var(--text-muted)" }, textContent: `${roleLabel} • ${u.className ? `${u.className}-${u.section}` : u.wing} ${u.subject ? `• ${u.subject}` : ""}` }),
               ]),
-              u.id !== admin.id
-                ? el("button", {
-                    type: "button",
-                    className: "btn btn-rose btn-sm",
-                    onClick: async () => {
-                      await apiRequest(`/api/users/${encodeURIComponent(u.id)}`, { method: "DELETE" });
-                      await refreshDashboard();
-                      showToast("Account removed.");
-                      render();
-                    },
-                    textContent: "Delete",
-                  })
-                : el("span", { className: "pill pill-gold", textContent: "Active You" }),
-            ])
-          )
+              el("div", { className: "btn-row" }, [
+                el("button", {
+                  type: "button",
+                  className: "btn btn-outline btn-sm",
+                  onClick: () => {
+                    editingUserId = u.id;
+                    newRole = u.primaryRole || u.role || "STUDENT";
+                    roleSelect.value = newRole;
+                    extraRolesSet.clear();
+                    for (const er of u.extraRoles || []) extraRolesSet.add(er);
+                    feeMgrCheckbox.checked = extraRolesSet.has("FEE_MANAGER");
+                    adminCheckbox.checked = extraRolesSet.has("ADMIN");
+                    newFullName = u.fullName || "";
+                    fullNameInput.value = newFullName;
+                    newUserId = u.userId || "";
+                    userIdInput.value = newUserId;
+                    newPassword = "";
+                    passwordInput.value = "";
+                    newPhone = u.phone || "";
+                    phoneInput.value = newPhone;
+                    if (u.className) {
+                      newClass = u.className;
+                      classSelect.value = newClass;
+                    }
+                    if (u.section) {
+                      newSection = u.section;
+                      sectionSelect.value = newSection;
+                    }
+                    newParent = u.parentName || "";
+                    parentInput.value = newParent;
+                    newTuition = String(u.monthlyTuition ?? 0);
+                    tuitionInput.value = newTuition;
+                    newTransport = String(u.transportFee ?? 0);
+                    transportInput.value = newTransport;
+                    selectedSubjectsSet.clear();
+                    const subs = String(u.subject || "").split(",").map((s) => s.trim()).filter(Boolean);
+                    const extras = [];
+                    for (const s of subs) {
+                      if (ALL_SUBJECTS.includes(s)) selectedSubjectsSet.add(s);
+                      else extras.push(s);
+                    }
+                    subjectCheckboxes.forEach(({ sub, cb }) => { cb.checked = selectedSubjectsSet.has(sub); });
+                    customSubjectText = extras.join(", ");
+                    customSubInput.value = customSubjectText;
+                    syncRoleVisibility();
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  },
+                  textContent: "Edit",
+                }),
+                u.id !== admin.id
+                  ? el("button", {
+                      type: "button",
+                      className: "btn btn-rose btn-sm",
+                      onClick: async () => {
+                        await apiRequest(`/api/users/${encodeURIComponent(u.id)}`, { method: "DELETE" });
+                        await refreshDashboard();
+                        showToast("Account removed.");
+                        render();
+                      },
+                      textContent: "Delete",
+                    })
+                  : el("span", { className: "pill pill-gold", textContent: "Active You" }),
+              ]),
+            ]);
+          })
         ),
       ]),
     ]);
@@ -2319,15 +3028,53 @@ function renderAuthenticatedShell(root) {
 
   if (state.activeTab >= tabDefs.length) state.activeTab = 0;
 
+  const assignedRoles = user.roles && user.roles.length > 0 ? user.roles : [user.role];
+
   const topbar = el("header", { className: "topbar" }, [
     el("div", { className: "topbar-brand" }, [
-      el("img", { src: "/crest.svg", alt: "Doon Public School Logo", className: "topbar-logo" }),
+      el("img", { src: "/school-logo.png", alt: "Doon Public School Official Logo", className: "topbar-logo" }),
       el("div", {}, [
         el("h1", { className: "topbar-title", textContent: SCHOOL_INFO.name }),
         el("p", { className: "topbar-sub", textContent: `${user.fullName} • ${user.role.replace("_", " ")} (${user.userId})` }),
       ]),
     ]),
     el("div", { className: "topbar-actions" }, [
+      ...(assignedRoles.length > 1
+        ? [
+            el(
+              "select",
+              {
+                className: "icon-btn",
+                "aria-label": "Switch Portal Role",
+                onChange: async (e) => {
+                  const targetRole = e.target.value;
+                  if (!targetRole || targetRole === user.role) return;
+                  try {
+                    const res = await apiRequest("/api/auth/switch-role", {
+                      method: "POST",
+                      body: JSON.stringify({ role: targetRole }),
+                    });
+                    state.token = res.token;
+                    state.activeTab = 0;
+                    await refreshDashboard();
+                    showToast(`Switched portal to ${targetRole.replace("_", " ")}`);
+                    render();
+                  } catch (err) {
+                    showToast(err.message);
+                  }
+                },
+              },
+              assignedRoles.map((r) =>
+                el("option", {
+                  value: r,
+                  selected: r === user.role,
+                  style: { color: "#0B1D39" },
+                  textContent: `Role: ${r.replace("_", " ")}`,
+                })
+              )
+            ),
+          ]
+        : []),
       el("button", { type: "button", className: "icon-btn", onClick: toggleDarkMode, textContent: state.darkMode ? "Light" : "Dark" }),
       el("button", { type: "button", className: "icon-btn", onClick: openProfileModal, textContent: "Profile" }),
       el("button", {

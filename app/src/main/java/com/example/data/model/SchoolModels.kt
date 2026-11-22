@@ -256,6 +256,9 @@ data class SchoolUser(
     @DocumentId val id: String = "",
     val ownerUid: String = "",
     val role: String = "STUDENT", // ADMIN | TEACHER | FEE_MANAGER | STUDENT
+    val primaryRole: String = "",
+    val roles: List<String> = emptyList(),
+    val extraRoles: List<String> = emptyList(),
     val userId: String = "",
     val password: String = "",
     val fullName: String = "",
@@ -270,6 +273,15 @@ data class SchoolUser(
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null,
 )
+
+fun SchoolUser.effectiveRoles(): List<String> {
+    val base = primaryRole.ifBlank { role }
+    return (listOf(base) + roles + extraRoles)
+        .map { it.trim().uppercase(Locale.US) }
+        .filter { it in setOf("ADMIN", "TEACHER", "FEE_MANAGER", "STUDENT") }
+        .distinct()
+        .ifEmpty { listOf(role) }
+}
 
 @IgnoreExtraProperties
 data class GatewayConfig(
@@ -526,4 +538,35 @@ data class CraftLike(
     val likerId: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+enum class FeeBillScope(val apiValue: String, val label: String) {
+    CLASSES("CLASSES", "Classes"),
+    STUDENTS("STUDENTS", "Students"),
+    ENTIRE_SCHOOL("ALL", "Entire School"),
+}
+
+enum class FeeBillType(val apiValue: String, val label: String) {
+    BOTH("BOTH", "Account Bill (Tuition + Transport)"),
+    TUITION("TUITION", "Tuition Fee Only"),
+    TRANSPORT("TRANSPORT", "Transport / Bus Only"),
+    MISC("MISC", "Extra / Misc Fee"),
+}
+
+data class FeeBillRequest(
+    val scope: FeeBillScope,
+    val selectedClasses: Set<String> = emptySet(),
+    val sectionFilter: String = "",
+    val selectedStudentDocIds: Set<String> = emptySet(),
+    val billType: FeeBillType,
+    val month: String,
+    val miscTitle: String = "",
+    val miscAmount: Long = 0L,
+)
+
+data class FeeBillResult(
+    val itemsCreated: Int,
+    val studentsBilled: Int,
+    val skippedDuplicates: Int,
+    val totalStudentsMatched: Int,
 )

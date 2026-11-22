@@ -81,9 +81,11 @@ fun TeacherScreen(
     var selectedSection by remember(teacher.id) { mutableStateOf(teacher.section.ifBlank { "A" }) }
     val subjectsForCls = remember(selectedClass) { SchoolCatalog.subjectsForClass(selectedClass) }
     var selectedSubject by remember(selectedClass, teacher.subject) {
+        val teacherSubs = teacher.subject.split(",").map { it.trim() }.filter { it.isNotBlank() }
         mutableStateOf(
-            if (teacher.subject in subjectsForCls) teacher.subject
-            else subjectsForCls.firstOrNull() ?: "Mathematics"
+            teacherSubs.firstOrNull { it in subjectsForCls }
+                ?: subjectsForCls.firstOrNull()
+                ?: "Mathematics"
         )
     }
     var selectedDate by remember { mutableStateOf(SchoolCatalog.todayIso()) }

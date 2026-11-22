@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
   parent_name TEXT NOT NULL DEFAULT '',
   monthly_tuition INTEGER NOT NULL DEFAULT 0,
   transport_fee INTEGER NOT NULL DEFAULT 0,
+  extra_roles TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -261,3 +262,17 @@ CREATE TABLE IF NOT EXISTS timetables (
   updated_by TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS admission_inquiries (
+  id TEXT PRIMARY KEY,
+  student_name TEXT NOT NULL,
+  parent_name TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  applying_class TEXT NOT NULL,
+  previous_school TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'NEW' CHECK (status IN ('NEW', 'CONTACTED', 'ENROLLED')),
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_inquiries_created ON admission_inquiries(created_at DESC);

@@ -195,8 +195,14 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         }
 
         val userSnap = col("users").document(schoolUserDocId).get().await()
-        userSnap.toObject(SchoolUser::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        val loadedUser = userSnap.toObject(SchoolUser::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
             ?: throw IllegalStateException("School account profile was not found.")
+        val baseRole = loadedUser.primaryRole.ifBlank { loadedUser.role }
+        loadedUser.copy(
+            role = matchedRole,
+            primaryRole = baseRole,
+            roles = (listOf(baseRole) + loadedUser.roles + loadedUser.extraRoles).distinct(),
+        )
     }.onFailure { e ->
         if (e is CancellationException) throw e
         if (e is FirebaseFirestoreException) {
@@ -554,7 +560,19 @@ class SchoolRepository(private val db: FirebaseFirestore) {
 
     suspend fun saveUser(user: SchoolUser, editorRole: String = "ADMIN"): Result<String> = runCatching {
         val uid = requireUserId()
+        val staffAllowed = setOf("TEACHER", "FEE_MANAGER", "ADMIN")
+        val baseRole = user.primaryRole.ifBlank { user.role }.trim().uppercase(Locale.US)
+        val cleanExtraRoles = if (baseRole == "TEACHER") {
+            user.extraRoles.map { it.trim().uppercase(Locale.US) }.filter { it in staffAllowed && it != baseRole }.distinct()
+        } else {
+            emptyList()
+        }
+        val allRoles = (listOf(baseRole) + cleanExtraRoles).distinct()
         val sanitized = user.copy(
+            role = baseRole,
+            primaryRole = baseRole,
+            roles = allRoles,
+            extraRoles = cleanExtraRoles,
             userId = user.userId.trim().take(40),
             password = user.password.trim().take(64),
             fullName = user.fullName.trim().take(100),
@@ -562,7 +580,7 @@ class SchoolRepository(private val db: FirebaseFirestore) {
             wing = user.wing.trim().take(50),
             className = user.className.trim().take(30),
             section = user.section.trim().take(10),
-            subject = user.subject.trim().take(60),
+            subject = user.subject.trim().take(120),
             parentName = user.parentName.trim().take(100),
             monthlyTuition = user.monthlyTuition.coerceAtLeast(0L),
             transportFee = user.transportFee.coerceAtLeast(0L),
@@ -570,25 +588,33 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         val usersCol = col("users")
         if (sanitized.id.isBlank()) {
             val docRef = usersCol.document()
-            val newTicketId = computeLoginTicketId(sanitized.role, sanitized.userId, sanitized.password)
             val batch = db.batch()
             batch.set(docRef, sanitized.copy(id = "", ownerUid = uid, createdAt = null, updatedAt = null))
-            batch.set(
-                col("loginIndex").document(newTicketId),
-                loginTicketPayload(uid, docRef.id, sanitized.role, sanitized.userId, sanitized.className, sanitized.section)
-            )
+            allRoles.forEach { r ->
+                val ticketId = computeLoginTicketId(r, sanitized.userId, sanitized.password)
+                batch.set(
+                    col("loginIndex").document(ticketId),
+                    loginTicketPayload(uid, docRef.id, r, sanitized.userId, sanitized.className, sanitized.section)
+                )
+            }
             batch.commit().await()
             docRef.id
         } else {
             val docRef = usersCol.document(sanitized.id)
             val oldSnap = docRef.get().await()
             val oldUser = oldSnap.toObject(SchoolUser::class.java)
-            val oldTicketId = oldUser?.let { computeLoginTicketId(it.role, it.userId, it.password) }.orEmpty()
-            val newTicketId = computeLoginTicketId(sanitized.role, sanitized.userId, sanitized.password)
+            val oldTicketIds = oldUser?.let { u ->
+                u.effectiveRoles().map { r -> computeLoginTicketId(r, u.userId, u.password) }
+            }.orEmpty().toSet()
+            val newTicketsByRole = allRoles.associateWith { r ->
+                computeLoginTicketId(r, sanitized.userId, sanitized.password)
+            }
+            val newTicketIds = newTicketsByRole.values.toSet()
 
             val memberRef = col("members").document(uid)
             val memberSnap = memberRef.get().await()
             val isEditingCurrentLogin = memberSnap.exists() && memberSnap.getString("schoolUserDocId") == sanitized.id
+            val activeMemberRole = memberSnap.getString("role")?.takeIf { it in allRoles } ?: sanitized.role
 
             val batch = db.batch()
             val updateFields = mutableMapOf<String, Any>(
@@ -607,41 +633,31 @@ class SchoolRepository(private val db: FirebaseFirestore) {
             )
             if (editorRole == "ADMIN") {
                 updateFields["role"] = sanitized.role
+                updateFields["primaryRole"] = sanitized.primaryRole
+                updateFields["roles"] = sanitized.roles
+                updateFields["extraRoles"] = sanitized.extraRoles
             }
             batch.update(docRef, updateFields)
 
-            if (newTicketId == oldTicketId && oldTicketId.isNotBlank()) {
+            newTicketsByRole.forEach { (r, ticketId) ->
+                batch.set(
+                    col("loginIndex").document(ticketId),
+                    loginTicketPayload(uid, sanitized.id, r, sanitized.userId, sanitized.className, sanitized.section)
+                )
+            }
+            (oldTicketIds - newTicketIds).forEach { staleId ->
+                if (staleId.isNotBlank()) batch.delete(col("loginIndex").document(staleId))
+            }
+            if (isEditingCurrentLogin) {
                 batch.update(
-                    col("loginIndex").document(newTicketId),
+                    memberRef,
                     mapOf(
-                        "ownerUid" to uid,
                         "schoolUserDocId" to sanitized.id,
-                        "role" to sanitized.role,
-                        "userId" to sanitized.userId,
-                        "className" to sanitized.className,
-                        "section" to sanitized.section,
+                        "role" to activeMemberRole,
+                        "loginTicketId" to (newTicketsByRole[activeMemberRole] ?: newTicketIds.first()),
                         "updatedAt" to FieldValue.serverTimestamp(),
                     )
                 )
-            } else {
-                batch.set(
-                    col("loginIndex").document(newTicketId),
-                    loginTicketPayload(uid, sanitized.id, sanitized.role, sanitized.userId, sanitized.className, sanitized.section)
-                )
-                if (isEditingCurrentLogin) {
-                    batch.update(
-                        memberRef,
-                        mapOf(
-                            "schoolUserDocId" to sanitized.id,
-                            "role" to sanitized.role,
-                            "loginTicketId" to newTicketId,
-                            "updatedAt" to FieldValue.serverTimestamp(),
-                        )
-                    )
-                }
-                if (oldTicketId.isNotBlank()) {
-                    batch.delete(col("loginIndex").document(oldTicketId))
-                }
             }
             batch.commit().await()
             docRef.id
@@ -651,12 +667,32 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         handleFirestoreError(e, OperationType.WRITE, "schools/$schoolId/users")
     }
 
+    suspend fun switchActiveMemberRole(user: SchoolUser, targetRole: String): Result<SchoolUser> = runCatching {
+        val uid = requireUserId()
+        val allowed = user.effectiveRoles()
+        require(targetRole in allowed) { "Your account does not have permission for $targetRole." }
+        val ticketId = computeLoginTicketId(targetRole, user.userId, user.password)
+        col("members").document(uid).update(
+            mapOf(
+                "role" to targetRole,
+                "loginTicketId" to ticketId,
+                "updatedAt" to FieldValue.serverTimestamp(),
+            )
+        ).await()
+        user.copy(role = targetRole, roles = allowed)
+    }.onFailure { e ->
+        if (e is CancellationException) throw e
+        handleFirestoreError(e, OperationType.UPDATE, "schools/$schoolId/members")
+    }
+
     suspend fun deleteUserAccount(user: SchoolUser): Result<Unit> = runCatching {
         requireUserId()
         val batch = db.batch()
         batch.delete(col("users").document(user.id))
-        val ticketId = computeLoginTicketId(user.role, user.userId, user.password)
-        batch.delete(col("loginIndex").document(ticketId))
+        user.effectiveRoles().forEach { r ->
+            val ticketId = computeLoginTicketId(r, user.userId, user.password)
+            batch.delete(col("loginIndex").document(ticketId))
+        }
         batch.commit().await()
         Unit
     }.onFailure { e ->
@@ -681,11 +717,15 @@ class SchoolRepository(private val db: FirebaseFirestore) {
         val cleanPhone = newPhone.trim().take(30)
         val cleanPw = newPassword.trim().take(64)
 
-        val oldTicketId = computeLoginTicketId(oldUser.role, oldUser.userId, oldUser.password)
-        val newTicketId = computeLoginTicketId(oldUser.role, oldUser.userId, cleanPw)
+        val roles = oldUser.effectiveRoles()
+        val oldTicketIds = roles.map { r -> computeLoginTicketId(r, oldUser.userId, oldUser.password) }.toSet()
+        val newTicketsByRole = roles.associateWith { r -> computeLoginTicketId(r, oldUser.userId, cleanPw) }
+        val newTicketIds = newTicketsByRole.values.toSet()
+
         val memberRef = col("members").document(uid)
         val memberSnap = memberRef.get().await()
         val isOwnMember = memberSnap.exists() && memberSnap.getString("schoolUserDocId") == userDocId
+        val activeMemberRole = memberSnap.getString("role")?.takeIf { it in roles } ?: oldUser.role
 
         val batch = db.batch()
         batch.update(
@@ -697,22 +737,24 @@ class SchoolRepository(private val db: FirebaseFirestore) {
                 "updatedAt" to FieldValue.serverTimestamp(),
             )
         )
-        if (oldTicketId != newTicketId) {
-            batch.set(
-                col("loginIndex").document(newTicketId),
-                loginTicketPayload(uid, userDocId, oldUser.role, oldUser.userId, oldUser.className, oldUser.section)
-            )
+        if (oldTicketIds != newTicketIds) {
+            newTicketsByRole.forEach { (r, ticketId) ->
+                batch.set(
+                    col("loginIndex").document(ticketId),
+                    loginTicketPayload(uid, userDocId, r, oldUser.userId, oldUser.className, oldUser.section)
+                )
+            }
             if (isOwnMember) {
                 batch.update(
                     memberRef,
                     mapOf(
-                        "loginTicketId" to newTicketId,
+                        "loginTicketId" to (newTicketsByRole[activeMemberRole] ?: newTicketIds.first()),
                         "updatedAt" to FieldValue.serverTimestamp(),
                     )
                 )
             }
-            if (oldTicketId.isNotBlank()) {
-                batch.delete(col("loginIndex").document(oldTicketId))
+            (oldTicketIds - newTicketIds).forEach { oldId ->
+                if (oldId.isNotBlank()) batch.delete(col("loginIndex").document(oldId))
             }
         }
         batch.commit().await()

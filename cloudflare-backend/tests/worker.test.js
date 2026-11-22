@@ -23,6 +23,7 @@ function createMockD1() {
     craft_likes: new Map(),
     campus_posters: new Map(),
     timetables: new Map(),
+    admission_inquiries: new Map(),
   };
 
   function runStmt(sql, args = []) {
@@ -71,13 +72,34 @@ function createMockD1() {
       }
       return { results: [], first: null };
     }
+    if (s.startsWith("ALTER TABLE users ADD COLUMN extra_roles")) {
+      return { results: [], first: null };
+    }
     if (s.startsWith("INSERT INTO users")) {
-      const [id, role, user_id, password_hash, full_name, phone, wing, class_name, section, subject, parent_name, monthly_tuition, transport_fee, created_at, updated_at] = args;
-      tables.users.set(id, { id, role, user_id, password_hash, full_name, phone, wing, class_name, section, subject, parent_name, monthly_tuition, transport_fee, created_at, updated_at });
+      if (s.includes("extra_roles")) {
+        const [id, role, extra_roles, user_id, password_hash, full_name, phone, wing, class_name, section, subject, parent_name, monthly_tuition, transport_fee, created_at, updated_at] = args;
+        tables.users.set(id, { id, role, extra_roles, user_id, password_hash, full_name, phone, wing, class_name, section, subject, parent_name, monthly_tuition, transport_fee, created_at, updated_at });
+      } else {
+        const [id, role, user_id, password_hash, full_name, phone, wing, class_name, section, subject, parent_name, monthly_tuition, transport_fee, created_at, updated_at] = args;
+        tables.users.set(id, { id, role, extra_roles: "", user_id, password_hash, full_name, phone, wing, class_name, section, subject, parent_name, monthly_tuition, transport_fee, created_at, updated_at });
+      }
+      return { results: [], first: null };
+    }
+    if (s.startsWith("UPDATE users SET role = ?, extra_roles = ?")) {
+      const [role, extra_roles, user_id, password_hash, full_name, phone, wing, class_name, section, subject, parent_name, monthly_tuition, transport_fee, updated_at, id] = args;
+      const existing = tables.users.get(id);
+      if (existing) {
+        tables.users.set(id, { ...existing, role, extra_roles, user_id, password_hash, full_name, phone, wing, class_name, section, subject, parent_name, monthly_tuition, transport_fee, updated_at });
+      }
       return { results: [], first: null };
     }
     if (s.startsWith("SELECT * FROM users WHERE id = ?")) {
       const first = tables.users.get(args[0]) || null;
+      return { results: first ? [first] : [], first };
+    }
+    if (s.startsWith("SELECT * FROM users WHERE LOWER(user_id) = LOWER(?) LIMIT 1")) {
+      const [uid] = args;
+      const first = [...tables.users.values()].find((u) => u.user_id.toLowerCase() === String(uid).toLowerCase()) || null;
       return { results: first ? [first] : [], first };
     }
     if (s.startsWith("SELECT * FROM users WHERE role = ? AND LOWER(user_id) = LOWER(?) LIMIT 1")) {
@@ -141,6 +163,61 @@ function createMockD1() {
     if (s.startsWith("SELECT project_id FROM craft_likes WHERE liker_id = ?")) {
       const res = [...tables.craft_likes.values()].filter((l) => l.liker_id === args[0]).map((l) => ({ project_id: l.project_id }));
       return { results: res, first: res[0] || null };
+    }
+    if (s.startsWith("SELECT id, full_name, class_name, section, monthly_tuition, transport_fee FROM users WHERE role = 'STUDENT'")) {
+      let rows = [...tables.users.values()].filter((u) => u.role === "STUDENT");
+      if (s.includes("class_name IN (")) {
+        const m = s.match(/class_name IN \(([^)]+)\)/);
+        const classCount = m ? m[1].split(",").length : 0;
+        const targetClasses = new Set(args.slice(0, classCount));
+        rows = rows.filter((u) => targetClasses.has(u.class_name));
+        if (s.includes("AND section = ?")) {
+          const sec = args[classCount];
+          rows = rows.filter((u) => u.section === sec);
+        }
+      } else if (s.includes("id IN (")) {
+        const targetIds = new Set(args);
+        rows = rows.filter((u) => targetIds.has(u.id));
+      }
+      return { results: rows, first: rows[0] || null };
+    }
+    if (s.startsWith("SELECT * FROM users WHERE role = 'STUDENT'")) {
+      const rows = [...tables.users.values()].filter((u) => u.role === "STUDENT");
+      return { results: rows, first: rows[0] || null };
+    }
+    if (s.startsWith("SELECT student_doc_id, title FROM fee_items WHERE month = ?")) {
+      const rows = [...tables.fee_items.values()].filter((f) => f.month === args[0]).map((f) => ({ student_doc_id: f.student_doc_id, title: f.title }));
+      return { results: rows, first: rows[0] || null };
+    }
+    if (s.startsWith("INSERT INTO fee_items")) {
+      const [id, student_doc_id, title, month, amount, created_at] = args;
+      tables.fee_items.set(id, { id, student_doc_id, title, month, amount, status: "UNPAID", payment_id: "", created_at });
+      return { results: [], first: null };
+    }
+    if (s.startsWith("SELECT * FROM fee_items WHERE student_doc_id = ?")) {
+      const rows = [...tables.fee_items.values()].filter((f) => f.student_doc_id === args[0]);
+      return { results: rows, first: rows[0] || null };
+    }
+    if (s.startsWith("SELECT * FROM fee_items")) {
+      const rows = [...tables.fee_items.values()];
+      return { results: rows, first: rows[0] || null };
+    }
+    if (s.startsWith("CREATE TABLE IF NOT EXISTS admission_inquiries")) {
+      return { results: [], first: null };
+    }
+    if (s.startsWith("INSERT INTO admission_inquiries")) {
+      const [id, student_name, parent_name, phone, applying_class, previous_school, notes, created_at] = args;
+      tables.admission_inquiries.set(id, { id, student_name, parent_name, phone, applying_class, previous_school, notes, status: "NEW", created_at });
+      return { results: [], first: null };
+    }
+    if (s.startsWith("SELECT * FROM admission_inquiries")) {
+      const rows = [...tables.admission_inquiries.values()];
+      return { results: rows, first: rows[0] || null };
+    }
+    if (s.startsWith("UPDATE admission_inquiries SET status = ? WHERE id = ?")) {
+      const item = tables.admission_inquiries.get(args[1]);
+      if (item) item.status = args[0];
+      return { results: [], first: null };
     }
     return { results: [], first: null };
   }
@@ -309,9 +386,284 @@ test("Cloudflare Worker handles Admin setup claim, PBKDF2 login, sequential roll
   assert.equal((await res.json()).liked, false);
 });
 
+test("POST /api/fee-bills bills authoritative per-student account fees and prevents duplicates", async () => {
+  const env = {
+    DB: createMockD1(),
+    JWT_SECRET: "test_secret_key_for_unit_test_only",
+    SCHOOL_NAME: "Doon Public School, Etah",
+  };
+
+  const adminRes = await handleApiRequest(
+    apiReq("/api/auth/claim-admin", "POST", {
+      fullName: "Dr. Principal",
+      userId: "ADMIN01",
+      password: "StrongPassword123",
+    }),
+    env
+  );
+  const { token: adminToken } = await adminRes.json();
+
+  // Create Fee Manager + 3 students (2 in Class II with distinct fees, 1 in Class V)
+  await handleApiRequest(
+    apiReq(
+      "/api/users",
+      "POST",
+      { role: "FEE_MANAGER", userId: "FEE201", fullName: "Accountant Ji", password: "feePassword1" },
+      adminToken
+    ),
+    env
+  );
+  const s1Res = await handleApiRequest(
+    apiReq(
+      "/api/users",
+      "POST",
+      {
+        role: "STUDENT",
+        fullName: "Rohan Class2",
+        password: "pass1234",
+        className: "Class II",
+        section: "A",
+        monthlyTuition: 2100,
+        transportFee: 650,
+      },
+      adminToken
+    ),
+    env
+  );
+  const s1 = (await s1Res.json()).user;
+
+  const s2Res = await handleApiRequest(
+    apiReq(
+      "/api/users",
+      "POST",
+      {
+        role: "STUDENT",
+        fullName: "Meera Class2",
+        password: "pass1234",
+        className: "Class II",
+        section: "B",
+        monthlyTuition: 2600,
+        transportFee: 0,
+      },
+      adminToken
+    ),
+    env
+  );
+  const s2 = (await s2Res.json()).user;
+
+  const s3Res = await handleApiRequest(
+    apiReq(
+      "/api/users",
+      "POST",
+      {
+        role: "STUDENT",
+        fullName: "Kabir Class5",
+        password: "pass1234",
+        className: "Class V",
+        section: "A",
+        monthlyTuition: 3200,
+        transportFee: 900,
+      },
+      adminToken
+    ),
+    env
+  );
+  const s3 = (await s3Res.json()).user;
+
+  const fmLogin = await handleApiRequest(
+    apiReq("/api/auth/login", "POST", { role: "FEE_MANAGER", userId: "FEE201", password: "feePassword1" }),
+    env
+  );
+  const fmToken = (await fmLogin.json()).token;
+
+  const stLogin = await handleApiRequest(
+    apiReq("/api/auth/login", "POST", { role: "STUDENT", userId: s1.userId, password: "pass1234" }),
+    env
+  );
+  const s1Token = (await stLogin.json()).token;
+
+  // Student cannot trigger bills
+  const forbiddenRes = await handleApiRequest(
+    apiReq("/api/fee-bills", "POST", { scope: "ALL", billType: "BOTH", month: "December 2026" }, s1Token),
+    env
+  );
+  assert.equal(forbiddenRes.status, 403);
+
+  // Fee Manager triggers Class II (even attempting a bogus miscAmount is ignored for BOTH)
+  const billRes = await handleApiRequest(
+    apiReq(
+      "/api/fee-bills",
+      "POST",
+      { scope: "CLASSES", classes: ["Class II"], billType: "BOTH", month: "December 2026", miscAmount: 9999 },
+      fmToken
+    ),
+    env
+  );
+  assert.equal(billRes.status, 201);
+  const summary = await billRes.json();
+  assert.equal(summary.totalStudentsMatched, 2);
+  assert.equal(summary.studentsBilled, 2);
+  assert.equal(summary.itemsCreated, 3);
+  assert.equal(summary.skippedDuplicates, 0);
+
+  // Verify Rohan's dashboard has exact 2100 tuition + 650 transport
+  const s1Dash = await (await handleApiRequest(apiReq("/api/dashboard", "GET", null, s1Token), env)).json();
+  assert.equal(s1Dash.feeItems.length, 2);
+  assert.equal(s1Dash.feeItems.find((f) => f.title.includes("Tuition")).amount, 2100);
+  assert.equal(s1Dash.feeItems.find((f) => f.title.includes("Transport")).amount, 650);
+
+  // Verify Meera has 2600 tuition only (0 transport skipped)
+  const s2Token = (await (await handleApiRequest(apiReq("/api/auth/login", "POST", { role: "STUDENT", userId: s2.userId, password: "pass1234" }), env)).json()).token;
+  const s2Dash = await (await handleApiRequest(apiReq("/api/dashboard", "GET", null, s2Token), env)).json();
+  assert.equal(s2Dash.feeItems.length, 1);
+  assert.equal(s2Dash.feeItems[0].amount, 2600);
+
+  // Verify Kabir in Class V was not billed
+  const s3Token = (await (await handleApiRequest(apiReq("/api/auth/login", "POST", { role: "STUDENT", userId: s3.userId, password: "pass1234" }), env)).json()).token;
+  const s3Dash = await (await handleApiRequest(apiReq("/api/dashboard", "GET", null, s3Token), env)).json();
+  assert.equal(s3Dash.feeItems.length, 0);
+
+  // Re-triggering same month skips all 3 duplicates
+  const dupRes = await handleApiRequest(
+    apiReq("/api/fee-bills", "POST", { scope: "CLASSES", classes: ["Class II"], billType: "BOTH", month: "December 2026" }, fmToken),
+    env
+  );
+  const dupSummary = await dupRes.json();
+  assert.equal(dupSummary.itemsCreated, 0);
+  assert.equal(dupSummary.skippedDuplicates, 3);
+});
+
+test("Public admission inquiries persist to D1 and only Admin can review/update status", async () => {
+  const env = {
+    DB: createMockD1(),
+    JWT_SECRET: "test_secret_key_for_unit_test_only",
+    SCHOOL_NAME: "Doon Public School, Etah",
+  };
+
+  const adminRes = await handleApiRequest(
+    apiReq("/api/auth/claim-admin", "POST", {
+      fullName: "Dr. Principal",
+      userId: "ADMIN01",
+      password: "StrongPassword123",
+    }),
+    env
+  );
+  const { token: adminToken } = await adminRes.json();
+
+  const pubRes = await handleApiRequest(
+    apiReq("/api/admission-inquiries", "POST", {
+      studentName: "Aryan Tiwari",
+      parentName: "Rajesh Tiwari",
+      phone: "+91 9837012345",
+      applyingClass: "Class II",
+      previousSchool: "Little Flower",
+      notes: "Need school transport from Kasganj Road",
+    }),
+    env
+  );
+  assert.equal(pubRes.status, 201);
+  const created = await pubRes.json();
+  assert.ok(created.id);
+
+  const dash = await (await handleApiRequest(apiReq("/api/dashboard", "GET", null, adminToken), env)).json();
+  assert.equal(dash.admissionInquiries.length, 1);
+  assert.equal(dash.admissionInquiries[0].student_name, "Aryan Tiwari");
+  assert.equal(dash.admissionInquiries[0].status, "NEW");
+
+  const updRes = await handleApiRequest(
+    apiReq(`/api/admission-inquiries/${created.id}`, "PUT", { status: "CONTACTED" }, adminToken),
+    env
+  );
+  assert.equal(updRes.status, 200);
+  const dashAfter = await (await handleApiRequest(apiReq("/api/dashboard", "GET", null, adminToken), env)).json();
+  assert.equal(dashAfter.admissionInquiries[0].status, "CONTACTED");
+});
+
+test("Multi-role Teacher account supports multiple login roles, role switching, and RBAC enforcement", async () => {
+  const env = {
+    DB: createMockD1(),
+    JWT_SECRET: "test_secret_key_for_unit_test_only",
+    SCHOOL_NAME: "Doon Public School, Etah",
+  };
+
+  const adminRes = await handleApiRequest(
+    apiReq("/api/auth/claim-admin", "POST", {
+      fullName: "Dr. Principal",
+      userId: "ADMIN01",
+      password: "StrongPassword123",
+    }),
+    env
+  );
+  const { token: adminToken } = await adminRes.json();
+
+  const createRes = await handleApiRequest(
+    apiReq(
+      "/api/users",
+      "POST",
+      {
+        role: "TEACHER",
+        extraRoles: ["FEE_MANAGER", "ADMIN", "STUDENT"],
+        userId: "TCH501",
+        fullName: "Mrs. Kavita Singh",
+        password: "teacherPass1",
+        wing: "Middle School",
+        className: "Class VIII",
+        section: "A",
+        subject: "Mathematics, Science",
+      },
+      adminToken
+    ),
+    env
+  );
+  assert.equal(createRes.status, 201);
+  const createdUser = (await createRes.json()).user;
+  assert.deepEqual(createdUser.roles, ["TEACHER", "FEE_MANAGER", "ADMIN"]);
+  assert.deepEqual(createdUser.extraRoles, ["FEE_MANAGER", "ADMIN"]);
+
+  // Can log in as TEACHER
+  const loginTeacher = await handleApiRequest(
+    apiReq("/api/auth/login", "POST", { role: "TEACHER", userId: "TCH501", password: "teacherPass1" }),
+    env
+  );
+  assert.equal(loginTeacher.status, 200);
+  const teacherSession = await loginTeacher.json();
+  assert.equal(teacherSession.user.role, "TEACHER");
+
+  // Can also log in directly as FEE_MANAGER using same ID & password
+  const loginFeeMgr = await handleApiRequest(
+    apiReq("/api/auth/login", "POST", { role: "FEE_MANAGER", userId: "TCH501", password: "teacherPass1" }),
+    env
+  );
+  assert.equal(loginFeeMgr.status, 200);
+  assert.equal((await loginFeeMgr.json()).user.role, "FEE_MANAGER");
+
+  // Cannot log in as STUDENT (never granted to staff)
+  const loginStudent = await handleApiRequest(
+    apiReq("/api/auth/login", "POST", { role: "STUDENT", userId: "TCH501", password: "teacherPass1" }),
+    env
+  );
+  assert.equal(loginStudent.status, 401);
+
+  // Authenticated switch-role to ADMIN succeeds; unauthorized STUDENT fails with 403
+  const switchAdmin = await handleApiRequest(
+    apiReq("/api/auth/switch-role", "POST", { role: "ADMIN" }, teacherSession.token),
+    env
+  );
+  assert.equal(switchAdmin.status, 200);
+  const adminSwitched = await switchAdmin.json();
+  assert.equal(adminSwitched.user.role, "ADMIN");
+
+  const switchForbidden = await handleApiRequest(
+    apiReq("/api/auth/switch-role", "POST", { role: "STUDENT" }, teacherSession.token),
+    env
+  );
+  assert.equal(switchForbidden.status, 403);
+});
+
 test("schema.sql contains required indexes for 3,000-user scale", () => {
   const sql = fs.readFileSync(new URL("../schema.sql", import.meta.url), "utf8");
   assert.ok(sql.includes("idx_users_role_class_sec"));
   assert.ok(sql.includes("idx_attendance_student"));
   assert.ok(sql.includes("UNIQUE(project_id, liker_id)"));
+  assert.ok(sql.includes("extra_roles"));
 });

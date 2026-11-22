@@ -187,26 +187,40 @@ class SchoolViewModel(
             .stateIn(viewModelScope, SharingStarted.Eagerly, SessionRestoreState.Checking)
 
     private val _activeSchoolUserDocId = MutableStateFlow<String?>(null)
+    private val _activeRoleOverride = MutableStateFlow<String?>(null)
     val activeSchoolUser: StateFlow<SchoolUser?> =
         if (isCloudflareMode) {
             combine(_cfDashboard, _isMemberReady) { dash, ready ->
                 if (!ready) null else dash?.currentUser
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), null)
         } else {
-            combine(_activeSchoolUserDocId, sessionRestoreState, usersState, _isMemberReady) { manualDocId, restoreState, usersUi, memberReady ->
+            combine(_activeSchoolUserDocId, _activeRoleOverride, sessionRestoreState, usersState, _isMemberReady) { manualDocId, roleOverride, restoreState, usersUi, memberReady ->
                 if (!memberReady) return@combine null
                 val list = (usersUi as? DataUiState.Success)?.data ?: return@combine null
-                if (manualDocId != null) {
+                val persisted = (restoreState as? SessionRestoreState.Ready)?.session
+                val matched = if (manualDocId != null) {
                     list.firstOrNull { it.id == manualDocId }
-                } else if (restoreState is SessionRestoreState.Ready && restoreState.session != null) {
-                    val persisted = restoreState.session
+                } else if (persisted != null) {
                     list.firstOrNull { persisted.docId.isNotBlank() && it.id == persisted.docId }
                         ?: list.firstOrNull {
-                            it.role == persisted.role &&
+                            persisted.role in it.effectiveRoles() &&
                                 it.userId.trim().equals(persisted.userId.trim(), ignoreCase = true)
                         }
                 } else {
                     null
+                }
+                matched?.let { u ->
+                    val effectiveList = u.effectiveRoles()
+                    val resolvedRole = when {
+                        roleOverride != null && roleOverride in effectiveList -> roleOverride
+                        persisted != null && persisted.role in effectiveList -> persisted.role
+                        else -> u.role
+                    }
+                    u.copy(
+                        role = resolvedRole,
+                        primaryRole = u.primaryRole.ifBlank { u.role },
+                        roles = effectiveList,
+                    )
                 }
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), null)
         }
@@ -474,6 +488,7 @@ class SchoolViewModel(
         return result.fold(
             onSuccess = { matchedUser ->
                 _activeSchoolUserDocId.value = matchedUser.id
+                _activeRoleOverride.value = matchedUser.role
                 sessionPrefs.saveRoleSession(
                     ownerUid = ownerUid,
                     docId = matchedUser.id,
@@ -491,8 +506,46 @@ class SchoolViewModel(
         )
     }
 
+    fun switchActiveRole(targetRole: String) {
+        val current = activeSchoolUser.value ?: return
+        if (targetRole == current.role || targetRole !in current.effectiveRoles()) return
+        viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.switchRole(tok, targetRole)
+                    .onSuccess { session ->
+                        _cfToken.value = session.token
+                        refreshCloudflareDashboard(session.token)
+                        sessionPrefs.saveRoleSession(
+                            ownerUid = ownerUid,
+                            docId = session.user.id,
+                            userId = session.user.userId.trim(),
+                            role = session.user.role,
+                            cloudflareToken = session.token,
+                        )
+                        _toastMessage.value = "Switched portal to ${targetRole.replace('_', ' ')}!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Unable to switch role." }
+            } else {
+                repository.switchActiveMemberRole(current, targetRole)
+                    .onSuccess { updated ->
+                        _activeRoleOverride.value = updated.role
+                        sessionPrefs.saveRoleSession(
+                            ownerUid = ownerUid,
+                            docId = updated.id,
+                            userId = updated.userId.trim(),
+                            role = updated.role,
+                        )
+                        _toastMessage.value = "Switched portal to ${targetRole.replace('_', ' ')}!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Unable to switch role." }
+            }
+        }
+    }
+
     fun logoutSchoolRole() {
         _activeSchoolUserDocId.value = null
+        _activeRoleOverride.value = null
         _isMemberReady.value = false
         _cfToken.value = null
         _cfDashboard.value = null
@@ -976,46 +1029,110 @@ class SchoolViewModel(
         }
     }
 
-    fun assignFeeDemands(
-        targets: List<SchoolUser>,
-        feeHead: String,
-        month: String,
-        customAmount: Long,
-        useStudentDefaultIfBulk: Boolean,
-    ) {
+    fun assignFeeDemands(request: FeeBillRequest) {
+        val cleanMonth = request.month.trim()
+        if (cleanMonth.isBlank()) {
+            _toastMessage.value = "Please enter a billing month or term (e.g. December 2026)."
+            return
+        }
+        if (request.scope == FeeBillScope.CLASSES && request.selectedClasses.isEmpty()) {
+            _toastMessage.value = "Please select at least one class to bill."
+            return
+        }
+        if (request.scope == FeeBillScope.STUDENTS && request.selectedStudentDocIds.isEmpty()) {
+            _toastMessage.value = "Please select at least one student to bill."
+            return
+        }
+        if (request.billType == FeeBillType.MISC && (request.miscTitle.isBlank() || request.miscAmount <= 0L)) {
+            _toastMessage.value = "Enter a valid Extra Fee title and positive amount."
+            return
+        }
+
         viewModelScope.launch {
-            val builtItems = targets.mapNotNull { st ->
-                val amt = if (useStudentDefaultIfBulk) {
-                    when (feeHead) {
-                        "Monthly Tuition Fee" -> if (st.monthlyTuition > 0) st.monthlyTuition else customAmount
-                        "Transport / Bus Fee" -> st.transportFee
-                        else -> customAmount
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.triggerFeeBills(tok, request)
+                    .onSuccess { res ->
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = if (res.itemsCreated > 0) {
+                            "Billed ${res.itemsCreated} fee head(s) across ${res.studentsBilled} student(s) (${res.skippedDuplicates} duplicates skipped)."
+                        } else {
+                            "0 new bills created (${res.skippedDuplicates} already billed for $cleanMonth, or ₹0 account fee)."
+                        }
                     }
-                } else {
-                    customAmount
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed triggering fee bills." }
+                return@launch
+            }
+
+            val allStudents = ((usersState.value as? DataUiState.Success)?.data ?: emptyList())
+                .filter { it.role == "STUDENT" }
+            val matchedStudents = when (request.scope) {
+                FeeBillScope.CLASSES -> allStudents.filter { st ->
+                    st.className in request.selectedClasses &&
+                        (request.sectionFilter.isBlank() || st.section.equals(request.sectionFilter, ignoreCase = true))
                 }
-                if (amt <= 0L) null
-                else FeeItem(
-                    studentDocId = st.id,
-                    title = "$feeHead ($month)",
-                    month = month,
-                    amount = amt,
+                FeeBillScope.STUDENTS -> allStudents.filter { it.id in request.selectedStudentDocIds }
+                FeeBillScope.ENTIRE_SCHOOL -> allStudents
+            }
+            if (matchedStudents.isEmpty()) {
+                _toastMessage.value = "No enrolled students matched your selected target."
+                return@launch
+            }
+
+            val existingFees = (feeItemsState.value as? DataUiState.Success)?.data ?: emptyList()
+            val existingKeys = existingFees
+                .map { "${it.studentDocId}:::${it.title.trim().lowercase()}" }
+                .toMutableSet()
+
+            val toCreate = mutableListOf<FeeItem>()
+            val billedStudents = mutableSetOf<String>()
+            var skippedDuplicates = 0
+
+            fun queueIfValid(student: SchoolUser, title: String, amount: Long) {
+                if (amount <= 0L) return
+                val key = "${student.id}:::${title.trim().lowercase()}"
+                if (!existingKeys.add(key)) {
+                    skippedDuplicates += 1
+                    return
+                }
+                billedStudents += student.id
+                toCreate += FeeItem(
+                    studentDocId = student.id,
+                    title = title,
+                    month = cleanMonth,
+                    amount = amount,
                     status = "UNPAID",
                     paymentId = "",
                 )
             }
-            if (isCloudflareMode) {
-                val tok = _cfToken.value ?: return@launch
-                CloudflareApiClient.assignFeeItems(tok, builtItems)
-                    .onSuccess { cnt ->
-                        refreshCloudflareDashboard(tok)
-                        _toastMessage.value = "Assigned fee demand to $cnt student(s)."
+
+            for (st in matchedStudents) {
+                when (request.billType) {
+                    FeeBillType.BOTH -> {
+                        queueIfValid(st, "Monthly Tuition Fee ($cleanMonth)", st.monthlyTuition)
+                        queueIfValid(st, "Transport / Bus Fee ($cleanMonth)", st.transportFee)
                     }
-                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed assigning fee demands." }
-                return@launch
+                    FeeBillType.TUITION -> {
+                        queueIfValid(st, "Monthly Tuition Fee ($cleanMonth)", st.monthlyTuition)
+                    }
+                    FeeBillType.TRANSPORT -> {
+                        queueIfValid(st, "Transport / Bus Fee ($cleanMonth)", st.transportFee)
+                    }
+                    FeeBillType.MISC -> {
+                        queueIfValid(st, "${request.miscTitle.trim()} ($cleanMonth)", request.miscAmount)
+                    }
+                }
             }
-            builtItems.forEach { repository.addFeeItem(it) }
-            _toastMessage.value = "Assigned fee demand to ${builtItems.size} student(s)."
+
+            var failed: Throwable? = null
+            toCreate.forEach { item ->
+                repository.addFeeItem(item).onFailure { failed = it }
+            }
+            _toastMessage.value = when {
+                failed != null -> failed?.localizedMessage ?: "Failed assigning some fee demands."
+                toCreate.isNotEmpty() -> "Billed ${toCreate.size} fee head(s) across ${billedStudents.size} student(s) using saved Account fees ($skippedDuplicates duplicates skipped)."
+                else -> "0 new bills created ($skippedDuplicates already billed for $cleanMonth, or ₹0 account fee)."
+            }
         }
     }
 

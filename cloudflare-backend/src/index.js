@@ -1,6 +1,7 @@
 import { hashPassword, verifyPassword, signJwt, verifyJwt } from "./auth.js";
 
 const VALID_ROLES = new Set(["ADMIN", "TEACHER", "FEE_MANAGER", "STUDENT"]);
+const STAFF_ROLES = new Set(["ADMIN", "TEACHER", "FEE_MANAGER"]);
 
 function cleanStr(v, maxLen = 200) {
   return String(v ?? "").trim().slice(0, maxLen);
@@ -49,11 +50,43 @@ function jsonResponse(data, status = 200, corsHeaders = {}) {
   });
 }
 
-function mapUserRow(row) {
+function parseExtraRoles(raw, primaryRole) {
+  const list = Array.isArray(raw)
+    ? raw
+    : String(raw ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+  if (primaryRole === "STUDENT") return [];
+  const out = [];
+  for (const r of list) {
+    const clean = String(r || "").trim().toUpperCase();
+    if (STAFF_ROLES.has(clean) && clean !== primaryRole && !out.includes(clean)) {
+      out.push(clean);
+    }
+  }
+  return out;
+}
+
+function getAllowedRoles(primaryRole, extraRolesRaw) {
+  if (!VALID_ROLES.has(primaryRole)) return [];
+  if (primaryRole === "STUDENT") return ["STUDENT"];
+  return [primaryRole, ...parseExtraRoles(extraRolesRaw, primaryRole)];
+}
+
+function mapUserRow(row, activeRoleOverride = null) {
   if (!row) return null;
+  const primaryRole = row.role;
+  const extraRoles = parseExtraRoles(row.extra_roles, primaryRole);
+  const roles = getAllowedRoles(primaryRole, extraRoles);
+  const effectiveRole =
+    activeRoleOverride && roles.includes(activeRoleOverride) ? activeRoleOverride : primaryRole;
   return {
     id: row.id,
-    role: row.role,
+    role: effectiveRole,
+    primaryRole,
+    roles,
+    extraRoles,
     userId: row.user_id,
     fullName: row.full_name,
     phone: row.phone,
@@ -132,6 +165,32 @@ async function ensureDefaultGateway(db) {
   return db.prepare("SELECT * FROM gateway_config LIMIT 1").first();
 }
 
+async function ensureUsersExtraRolesColumn(db) {
+  await db
+    .prepare("ALTER TABLE users ADD COLUMN extra_roles TEXT NOT NULL DEFAULT ''")
+    .run()
+    .catch(() => {});
+}
+
+async function ensureInquiriesTable(db) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS admission_inquiries (
+        id TEXT PRIMARY KEY,
+        student_name TEXT NOT NULL,
+        parent_name TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        applying_class TEXT NOT NULL,
+        previous_school TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'NEW' CHECK (status IN ('NEW', 'CONTACTED', 'ENROLLED')),
+        created_at INTEGER NOT NULL
+      )`
+    )
+    .run()
+    .catch(() => {});
+}
+
 async function nextStudentRollNumber(db) {
   const rows = await db
     .prepare("SELECT user_id FROM users WHERE role = 'STUDENT'")
@@ -173,7 +232,16 @@ async function requireAuth(request, env, db) {
   const payload = await verifyJwt(token, env.JWT_SECRET);
   if (!payload || !payload.sub) return null;
   const userRow = await db.prepare("SELECT * FROM users WHERE id = ?").bind(payload.sub).first();
-  return userRow || null;
+  if (!userRow) return null;
+  const allowedRoles = getAllowedRoles(userRow.role, userRow.extra_roles);
+  const effectiveRole = payload.role && allowedRoles.includes(payload.role) ? payload.role : userRow.role;
+  return {
+    ...userRow,
+    primaryRole: userRow.role,
+    role: effectiveRole,
+    roles: allowedRoles,
+    rawRow: userRow,
+  };
 }
 
 export async function handleApiRequest(request, env) {
@@ -211,6 +279,34 @@ export async function handleApiRequest(request, env) {
       await ensureDefaultGateway(db);
       const state = await getAdminBootstrapState(db, env);
       return jsonResponse(state, 200, cors);
+    }
+
+    if (path === "/api/admission-inquiries" && method === "POST") {
+      await ensureInquiriesTable(db);
+      const body = await request.json().catch(() => ({}));
+      const studentName = cleanStr(body.studentName, 100);
+      const parentName = cleanStr(body.parentName, 100);
+      const phone = cleanStr(body.phone, 25);
+      const applyingClass = cleanStr(body.applyingClass, 30);
+      const previousSchool = cleanStr(body.previousSchool, 120);
+      const notes = cleanStr(body.notes, 500);
+
+      if (!studentName || !parentName || phone.replace(/[^0-9]/g, "").length < 8 || !applyingClass) {
+        return jsonResponse({ error: "Student name, parent name, valid phone number, and class are required." }, 400, cors);
+      }
+      const id = `inq_${crypto.randomUUID().slice(0, 12)}`;
+      await db
+        .prepare(
+          `INSERT INTO admission_inquiries (id, student_name, parent_name, phone, applying_class, previous_school, notes, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'NEW', ?)`
+        )
+        .bind(id, studentName, parentName, phone, applyingClass, previousSchool, notes, Date.now())
+        .run();
+      return jsonResponse(
+        { id, message: "Admission inquiry received! Our Doon Public School, Etah admission desk will contact you shortly." },
+        201,
+        cors
+      );
     }
 
     if (path === "/api/auth/claim-admin" && method === "POST") {
@@ -275,24 +371,38 @@ export async function handleApiRequest(request, env) {
       }
 
       const userRow = await db
-        .prepare("SELECT * FROM users WHERE role = ? AND LOWER(user_id) = LOWER(?) LIMIT 1")
-        .bind(role, userId)
+        .prepare("SELECT * FROM users WHERE LOWER(user_id) = LOWER(?) LIMIT 1")
+        .bind(userId)
         .first();
       if (!userRow) {
+        return jsonResponse({ error: "Invalid User ID or password." }, 401, cors);
+      }
+      const allowedRoles = getAllowedRoles(userRow.role, userRow.extra_roles);
+      if (!allowedRoles.includes(role)) {
         return jsonResponse({ error: "Invalid User ID or password." }, 401, cors);
       }
       const ok = await verifyPassword(password, userRow.password_hash);
       if (!ok) {
         return jsonResponse({ error: "Invalid User ID or password." }, 401, cors);
       }
-      const token = await signJwt({ sub: userRow.id, role: userRow.role }, env.JWT_SECRET);
-      return jsonResponse({ token, user: mapUserRow(userRow) }, 200, cors);
+      const token = await signJwt({ sub: userRow.id, role }, env.JWT_SECRET);
+      return jsonResponse({ token, user: mapUserRow(userRow, role) }, 200, cors);
     }
 
     // All endpoints below require valid Bearer JWT
     const actor = await requireAuth(request, env, db);
     if (!actor) {
       return jsonResponse({ error: "Authentication required. Please sign in." }, 401, cors);
+    }
+
+    if (path === "/api/auth/switch-role" && method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const targetRole = cleanStr(body.role, 30);
+      if (!actor.roles.includes(targetRole)) {
+        return jsonResponse({ error: "Your account does not have permission for that role." }, 403, cors);
+      }
+      const token = await signJwt({ sub: actor.id, role: targetRole }, env.JWT_SECRET);
+      return jsonResponse({ token, user: mapUserRow(actor.rawRow, targetRole) }, 200, cors);
     }
 
     if (path === "/api/dashboard" && method === "GET") {
@@ -349,7 +459,7 @@ export async function handleApiRequest(request, env) {
         const uRes = await db.prepare(uSql).bind(...binds).all();
         users = (uRes.results || []).map(mapUserRow);
 
-        const [attRes, dailyRes, weeklyRes, feeRes, payRes, ttRes, countStudents, countTeachers, countFeeMgr] = await Promise.all([
+        const [attRes, dailyRes, weeklyRes, feeRes, payRes, ttRes, countStudents, countTeachers, countFeeMgr, inqRes] = await Promise.all([
           db.prepare("SELECT * FROM attendance ORDER BY updated_at DESC LIMIT 250").all(),
           db.prepare("SELECT * FROM dpt_daily ORDER BY date DESC LIMIT 120").all(),
           db.prepare("SELECT * FROM dpt_weekly ORDER BY updated_at DESC LIMIT 200").all(),
@@ -359,6 +469,7 @@ export async function handleApiRequest(request, env) {
           db.prepare("SELECT COUNT(*) as cnt FROM users WHERE role = 'STUDENT'").first(),
           db.prepare("SELECT COUNT(*) as cnt FROM users WHERE role = 'TEACHER'").first(),
           db.prepare("SELECT COUNT(*) as cnt FROM users WHERE role = 'FEE_MANAGER'").first(),
+          db.prepare("SELECT * FROM admission_inquiries ORDER BY created_at DESC LIMIT 60").all().catch(() => ({ results: [] })),
         ]);
         attendance = attRes.results || [];
         dptDaily = dailyRes.results || [];
@@ -369,7 +480,7 @@ export async function handleApiRequest(request, env) {
 
         return jsonResponse(
           {
-            currentUser: mapUserRow(actor),
+            currentUser: mapUserRow(actor.rawRow, actor.role),
             stats: {
               totalStudents: Number(countStudents?.cnt || 0),
               totalTeachers: Number(countTeachers?.cnt || 0),
@@ -387,6 +498,7 @@ export async function handleApiRequest(request, env) {
             feeItems,
             payments,
             timetables,
+            admissionInquiries: inqRes.results || [],
           },
           200,
           cors
@@ -430,14 +542,21 @@ export async function handleApiRequest(request, env) {
         timetables = ttRes.results || [];
       } else if (actor.role === "FEE_MANAGER") {
         const search = cleanStr(url.searchParams.get("search") || "", 60).toLowerCase();
-        const stuSql = search
-          ? "SELECT * FROM users WHERE role = 'STUDENT' AND (LOWER(full_name) LIKE ? OR LOWER(user_id) LIKE ? OR LOWER(class_name) LIKE ?) ORDER BY user_id ASC LIMIT 200"
-          : "SELECT * FROM users WHERE role = 'STUDENT' ORDER BY user_id ASC LIMIT 200";
-        const stuStmt = search
-          ? db.prepare(stuSql).bind(`%${search}%`, `%${search}%`, `%${search}%`)
-          : db.prepare(stuSql);
+        const fmClass = cleanStr(url.searchParams.get("className") || "", 30);
+        const clauses = ["role = 'STUDENT'"];
+        const binds = [];
+        if (fmClass) {
+          clauses.push("class_name = ?");
+          binds.push(fmClass);
+        }
+        if (search) {
+          clauses.push("(LOWER(full_name) LIKE ? OR LOWER(user_id) LIKE ? OR LOWER(class_name) LIKE ?)");
+          const pat = `%${search}%`;
+          binds.push(pat, pat, pat);
+        }
+        const stuSql = `SELECT * FROM users WHERE ${clauses.join(" AND ")} ORDER BY user_id ASC LIMIT 200`;
         const [uRes, feeRes, payRes] = await Promise.all([
-          stuStmt.all(),
+          db.prepare(stuSql).bind(...binds).all(),
           db.prepare("SELECT * FROM fee_items ORDER BY created_at DESC LIMIT 250").all(),
           db.prepare("SELECT * FROM fee_payments ORDER BY created_at DESC LIMIT 250").all(),
         ]);
@@ -464,7 +583,7 @@ export async function handleApiRequest(request, env) {
             .bind(actor.class_name, actor.section)
             .all(),
         ]);
-        users = [mapUserRow(actor)];
+        users = [mapUserRow(actor.rawRow, actor.role)];
         attendance = attRes.results || [];
         leaves = leaveRes.results || [];
         homework = hwRes.results || [];
@@ -479,7 +598,7 @@ export async function handleApiRequest(request, env) {
 
       return jsonResponse(
         {
-          currentUser: mapUserRow(actor),
+          currentUser: mapUserRow(actor.rawRow, actor.role),
           gateway: mapGatewayRow(gw),
           users,
           circulars: circulars.results || [],
@@ -518,7 +637,7 @@ export async function handleApiRequest(request, env) {
         .bind(fullName, phone, pwHash, now, actor.id)
         .run();
       const updated = await db.prepare("SELECT * FROM users WHERE id = ?").bind(actor.id).first();
-      return jsonResponse({ user: mapUserRow(updated) }, 200, cors);
+      return jsonResponse({ user: mapUserRow(updated, actor.role) }, 200, cors);
     }
 
     // Create / Update User (Admin full control, Teacher strictly own class-section Students)
@@ -526,18 +645,24 @@ export async function handleApiRequest(request, env) {
       if (actor.role !== "ADMIN" && actor.role !== "TEACHER") {
         return jsonResponse({ error: "Only Admin or Teacher can manage accounts." }, 403, cors);
       }
+      await ensureUsersExtraRolesColumn(db);
       const body = await request.json().catch(() => ({}));
       const isEdit = Boolean(body.id);
       const targetRole = actor.role === "TEACHER" ? "STUDENT" : cleanStr(body.role, 30);
       if (!VALID_ROLES.has(targetRole)) {
         return jsonResponse({ error: "Invalid user role." }, 400, cors);
       }
+      const extraRolesList =
+        actor.role === "ADMIN" && targetRole === "TEACHER"
+          ? parseExtraRoles(body.extraRoles ?? body.roles, targetRole)
+          : [];
+      const extraRolesStr = extraRolesList.join(",");
       const className = actor.role === "TEACHER" ? actor.class_name : cleanStr(body.className, 30);
       const section = actor.role === "TEACHER" ? actor.section : cleanStr(body.section, 10);
       const wing = cleanStr(body.wing, 50) || actor.wing || "";
       const fullName = cleanStr(body.fullName, 100);
       const phone = cleanStr(body.phone, 30);
-      const subject = targetRole === "TEACHER" ? cleanStr(body.subject, 60) : "";
+      const subject = targetRole === "TEACHER" ? cleanStr(body.subject, 120) : "";
       const parentName = targetRole === "STUDENT" ? cleanStr(body.parentName, 100) : "";
       const monthlyTuition = targetRole === "STUDENT" ? cleanInt(body.monthlyTuition, 0, 500_000) : 0;
       const transportFee = targetRole === "STUDENT" ? cleanInt(body.transportFee, 0, 200_000) : 0;
@@ -570,10 +695,11 @@ export async function handleApiRequest(request, env) {
         const pwHash = password ? await hashPassword(password) : existing.password_hash;
         await db
           .prepare(
-            `UPDATE users SET role = ?, user_id = ?, password_hash = ?, full_name = ?, phone = ?, wing = ?, class_name = ?, section = ?, subject = ?, parent_name = ?, monthly_tuition = ?, transport_fee = ?, updated_at = ? WHERE id = ?`
+            `UPDATE users SET role = ?, extra_roles = ?, user_id = ?, password_hash = ?, full_name = ?, phone = ?, wing = ?, class_name = ?, section = ?, subject = ?, parent_name = ?, monthly_tuition = ?, transport_fee = ?, updated_at = ? WHERE id = ?`
           )
           .bind(
             targetRole,
+            extraRolesStr,
             finalUserId,
             pwHash,
             fullName,
@@ -610,12 +736,13 @@ export async function handleApiRequest(request, env) {
         const pwHash = await hashPassword(password);
         await db
           .prepare(
-            `INSERT INTO users (id, role, user_id, password_hash, full_name, phone, wing, class_name, section, subject, parent_name, monthly_tuition, transport_fee, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            `INSERT INTO users (id, role, extra_roles, user_id, password_hash, full_name, phone, wing, class_name, section, subject, parent_name, monthly_tuition, transport_fee, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .bind(
             newId,
             targetRole,
+            extraRolesStr,
             finalUserId,
             pwHash,
             fullName,
@@ -952,6 +1079,135 @@ export async function handleApiRequest(request, env) {
     }
 
     // Fees & Payments
+    if (path === "/api/fee-bills" && method === "POST") {
+      if (actor.role !== "ADMIN" && actor.role !== "FEE_MANAGER") {
+        return jsonResponse({ error: "Forbidden" }, 403, cors);
+      }
+      const b = await request.json().catch(() => ({}));
+      const scope = String(b.scope || "CLASSES").trim().toUpperCase();
+      const billType = String(b.billType || "BOTH").trim().toUpperCase();
+      const month = cleanStr(b.month, 40);
+      const section = cleanStr(b.section, 10);
+      const rawClasses = Array.isArray(b.classes)
+        ? [...new Set(b.classes.map((c) => cleanStr(c, 30)).filter(Boolean))].slice(0, 20)
+        : [];
+      const rawStudentIds = Array.isArray(b.studentDocIds)
+        ? [...new Set(b.studentDocIds.map((id) => cleanStr(id, 128)).filter(Boolean))].slice(0, 500)
+        : [];
+
+      if (!month) {
+        return jsonResponse({ error: "Billing month / term is required." }, 400, cors);
+      }
+      if (!["CLASSES", "STUDENTS", "ALL"].includes(scope)) {
+        return jsonResponse({ error: "Invalid target scope." }, 400, cors);
+      }
+      if (!["BOTH", "TUITION", "TRANSPORT", "MISC"].includes(billType)) {
+        return jsonResponse({ error: "Invalid fee bill type." }, 400, cors);
+      }
+
+      let miscTitle = "";
+      let miscAmount = 0;
+      if (billType === "MISC") {
+        miscTitle = cleanStr(b.miscTitle || "Extra Fee", 80);
+        miscAmount = cleanInt(b.miscAmount, 0, 1_000_000);
+        if (!miscTitle || miscAmount <= 0) {
+          return jsonResponse({ error: "Extra fee title and positive amount are required." }, 400, cors);
+        }
+      }
+
+      let matchedStudents = [];
+      if (scope === "CLASSES") {
+        if (rawClasses.length === 0) {
+          return jsonResponse({ error: "Select at least one class to bill." }, 400, cors);
+        }
+        const ph = rawClasses.map(() => "?").join(",");
+        const binds = [...rawClasses];
+        let sql = `SELECT id, full_name, class_name, section, monthly_tuition, transport_fee FROM users WHERE role = 'STUDENT' AND class_name IN (${ph})`;
+        if (section) {
+          sql += " AND section = ?";
+          binds.push(section);
+        }
+        const res = await db.prepare(sql).bind(...binds).all();
+        matchedStudents = res.results || [];
+      } else if (scope === "STUDENTS") {
+        if (rawStudentIds.length === 0) {
+          return jsonResponse({ error: "Select at least one student to bill." }, 400, cors);
+        }
+        for (let i = 0; i < rawStudentIds.length; i += 80) {
+          const chunk = rawStudentIds.slice(i, i + 80);
+          const ph = chunk.map(() => "?").join(",");
+          const res = await db
+            .prepare(`SELECT id, full_name, class_name, section, monthly_tuition, transport_fee FROM users WHERE role = 'STUDENT' AND id IN (${ph})`)
+            .bind(...chunk)
+            .all();
+          matchedStudents.push(...(res.results || []));
+        }
+      } else {
+        const res = await db
+          .prepare("SELECT id, full_name, class_name, section, monthly_tuition, transport_fee FROM users WHERE role = 'STUDENT'")
+          .all();
+        matchedStudents = res.results || [];
+      }
+
+      const existingRows = await db
+        .prepare("SELECT student_doc_id, title FROM fee_items WHERE month = ?")
+        .bind(month)
+        .all();
+      const existingKeys = new Set(
+        (existingRows.results || []).map((r) => `${r.student_doc_id}:::${String(r.title || "").trim().toLowerCase()}`)
+      );
+
+      const now = Date.now();
+      const stmts = [];
+      const billedStudentIds = new Set();
+      let skippedDuplicates = 0;
+
+      const queueFee = (studentId, title, amount) => {
+        const cleanAmt = cleanInt(amount, 0, 1_000_000);
+        if (cleanAmt <= 0) return;
+        const key = `${studentId}:::${title.trim().toLowerCase()}`;
+        if (existingKeys.has(key)) {
+          skippedDuplicates += 1;
+          return;
+        }
+        existingKeys.add(key);
+        billedStudentIds.add(studentId);
+        const id = `fee_${crypto.randomUUID().slice(0, 12)}`;
+        stmts.push(
+          db
+            .prepare("INSERT INTO fee_items (id, student_doc_id, title, month, amount, status, payment_id, created_at) VALUES (?, ?, ?, ?, ?, 'UNPAID', '', ?)")
+            .bind(id, studentId, cleanStr(title, 120), month, cleanAmt, now)
+        );
+      };
+
+      for (const st of matchedStudents) {
+        if (billType === "BOTH" || billType === "TUITION") {
+          queueFee(st.id, `Monthly Tuition Fee (${month})`, st.monthly_tuition);
+        }
+        if (billType === "BOTH" || billType === "TRANSPORT") {
+          queueFee(st.id, `Transport / Bus Fee (${month})`, st.transport_fee);
+        }
+        if (billType === "MISC") {
+          queueFee(st.id, `${miscTitle} (${month})`, miscAmount);
+        }
+      }
+
+      for (let i = 0; i < stmts.length; i += 80) {
+        await db.batch(stmts.slice(i, i + 80));
+      }
+
+      return jsonResponse(
+        {
+          itemsCreated: stmts.length,
+          studentsBilled: billedStudentIds.size,
+          skippedDuplicates,
+          totalStudentsMatched: matchedStudents.length,
+        },
+        201,
+        cors
+      );
+    }
+
     if (path === "/api/fee-items" && method === "POST") {
       if (actor.role !== "ADMIN" && actor.role !== "FEE_MANAGER") return jsonResponse({ error: "Forbidden" }, 403, cors);
       const b = await request.json().catch(() => ({}));
@@ -1094,6 +1350,24 @@ export async function handleApiRequest(request, env) {
       if (actor.role !== "ADMIN" && actor.role !== "FEE_MANAGER") return jsonResponse({ error: "Forbidden" }, 403, cors);
       const id = cleanStr(path.slice("/api/fee-items/".length), 128);
       await db.prepare("DELETE FROM fee_items WHERE id = ?").bind(id).run();
+      return jsonResponse({ ok: true }, 200, cors);
+    }
+
+    if (path.startsWith("/api/admission-inquiries/") && method === "PUT") {
+      if (actor.role !== "ADMIN") return jsonResponse({ error: "Admin only" }, 403, cors);
+      const id = cleanStr(path.slice("/api/admission-inquiries/".length), 128);
+      const b = await request.json().catch(() => ({}));
+      const status = ["NEW", "CONTACTED", "ENROLLED"].includes(String(b.status || "").toUpperCase())
+        ? String(b.status).toUpperCase()
+        : "CONTACTED";
+      await db.prepare("UPDATE admission_inquiries SET status = ? WHERE id = ?").bind(status, id).run();
+      return jsonResponse({ ok: true, status }, 200, cors);
+    }
+
+    if (path.startsWith("/api/admission-inquiries/") && method === "DELETE") {
+      if (actor.role !== "ADMIN") return jsonResponse({ error: "Admin only" }, 403, cors);
+      const id = cleanStr(path.slice("/api/admission-inquiries/".length), 128);
+      await db.prepare("DELETE FROM admission_inquiries WHERE id = ?").bind(id).run();
       return jsonResponse({ ok: true }, 200, cors);
     }
 

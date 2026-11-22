@@ -128,6 +128,17 @@ object CloudflareApiClient {
         )
     }
 
+    suspend fun switchRole(token: String, targetRole: String): Result<CloudflareAuthSession> = runCatching {
+        val body = JSONObject().apply {
+            put("role", targetRole.trim())
+        }
+        val res = requestJson("POST", "/api/auth/switch-role", body = body, token = token)
+        CloudflareAuthSession(
+            token = res.getString("token"),
+            user = parseUser(res.getJSONObject("user")),
+        )
+    }
+
     suspend fun fetchDashboard(
         token: String,
         className: String = "",
@@ -203,7 +214,8 @@ object CloudflareApiClient {
     suspend fun saveUser(token: String, user: SchoolUser): Result<SchoolUser> = runCatching {
         val body = JSONObject().apply {
             if (user.id.isNotBlank()) put("id", user.id)
-            put("role", user.role)
+            put("role", user.primaryRole.ifBlank { user.role })
+            put("extraRoles", JSONArray(user.extraRoles))
             put("userId", user.userId)
             put("password", user.password)
             put("fullName", user.fullName)
@@ -412,6 +424,34 @@ object CloudflareApiClient {
         requestJson("PUT", "/api/doubts/${URLEncoder.encode(doubtId, "UTF-8")}", body = JSONObject().apply { put("reply", reply) }, token = token)
     }
 
+    suspend fun triggerFeeBills(token: String, request: FeeBillRequest): Result<FeeBillResult> = runCatching {
+        val classesArr = JSONArray().apply {
+            request.selectedClasses.forEach { put(it) }
+        }
+        val studentIdsArr = JSONArray().apply {
+            request.selectedStudentDocIds.forEach { put(it) }
+        }
+        val body = JSONObject().apply {
+            put("scope", request.scope.apiValue)
+            put("classes", classesArr)
+            put("section", request.sectionFilter)
+            put("studentDocIds", studentIdsArr)
+            put("billType", request.billType.apiValue)
+            put("month", request.month.trim())
+            if (request.billType == FeeBillType.MISC) {
+                put("miscTitle", request.miscTitle.trim())
+                put("miscAmount", request.miscAmount)
+            }
+        }
+        val res = requestJson("POST", "/api/fee-bills", body = body, token = token)
+        FeeBillResult(
+            itemsCreated = res.optInt("itemsCreated", 0),
+            studentsBilled = res.optInt("studentsBilled", 0),
+            skippedDuplicates = res.optInt("skippedDuplicates", 0),
+            totalStudentsMatched = res.optInt("totalStudentsMatched", 0),
+        )
+    }
+
     suspend fun assignFeeItems(token: String, items: List<FeeItem>): Result<Int> = runCatching {
         val arr = JSONArray()
         items.forEach { item ->
@@ -498,9 +538,26 @@ object CloudflareApiClient {
         }
     }
 
+    private fun JSONObject.strList(camel: String, snake: String = camel): List<String> {
+        val arr = optJSONArray(camel) ?: optJSONArray(snake)
+        if (arr != null) {
+            return buildList {
+                for (i in 0 until arr.length()) {
+                    val v = arr.optString(i).trim()
+                    if (v.isNotBlank()) add(v)
+                }
+            }
+        }
+        val raw = str(camel, snake)
+        return raw.split(",").map { it.trim() }.filter { it.isNotBlank() }
+    }
+
     private fun parseUser(o: JSONObject): SchoolUser = SchoolUser(
         id = o.str("id"),
         role = o.str("role", fallback = "STUDENT"),
+        primaryRole = o.str("primaryRole", "primary_role", o.str("role", fallback = "STUDENT")),
+        roles = o.strList("roles"),
+        extraRoles = o.strList("extraRoles", "extra_roles"),
         userId = o.str("userId", "user_id"),
         password = "",
         fullName = o.str("fullName", "full_name"),

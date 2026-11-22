@@ -33,6 +33,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ai.configureAppCheck
 import com.example.data.model.GatewayConfig
 import com.example.data.model.SchoolInfo
+import com.example.data.model.effectiveRoles
 import com.example.data.preferences.ThemePreferences
 import com.example.data.remote.CloudflareApiClient
 import com.example.data.repository.SchoolRepository
@@ -355,6 +356,41 @@ private fun AuthenticatedSchoolShell(
                         }
                     },
                     actions = {
+                        val assignedRoles = remember(user) { user.effectiveRoles() }
+                        if (assignedRoles.size > 1) {
+                            var roleSwitchExpanded by remember { mutableStateOf(false) }
+                            Box {
+                                IconButton(
+                                    onClick = { roleSwitchExpanded = true },
+                                    modifier = Modifier.testTag("topbar_portal_role_switch_btn"),
+                                ) {
+                                    Icon(Icons.Filled.SwapHoriz, contentDescription = "Switch Assigned Role")
+                                }
+                                DropdownMenu(
+                                    expanded = roleSwitchExpanded,
+                                    onDismissRequest = { roleSwitchExpanded = false },
+                                ) {
+                                    assignedRoles.forEach { roleKey ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    "${roleKey.replace('_', ' ')}${if (roleKey == user.role) " (Active)" else ""}"
+                                                )
+                                            },
+                                            leadingIcon = {
+                                                if (roleKey == user.role) {
+                                                    Icon(Icons.Filled.Check, contentDescription = null)
+                                                }
+                                            },
+                                            onClick = {
+                                                roleSwitchExpanded = false
+                                                viewModel.switchActiveRole(roleKey)
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
                         if (viewModel.isCloudflareMode) {
                             IconButton(
                                 onClick = { viewModel.retryCloudSync(userInitiated = true) },
@@ -541,7 +577,7 @@ private fun AuthenticatedSchoolShell(
                             payments = payments,
                             onVerifyPayment = { p, by, at, cnt -> viewModel.verifyPayment(p, by, at, cnt) },
                             onRejectPayment = { p, r, by, at -> viewModel.rejectPayment(p, r, by, at) },
-                            onAssignFeeDemands = { tgts, head, mo, amt, bulk -> viewModel.assignFeeDemands(tgts, head, mo, amt, bulk) },
+                            onAssignFeeDemands = { req -> viewModel.assignFeeDemands(req) },
                             onDeleteFeeItem = { viewModel.deleteRecord("feeItems", it.id, it.title) },
                             onSaveGatewayConfig = { viewModel.saveGatewayConfig(it) },
                             onOpenProfileEdit = { showProfileEditDialog = true },

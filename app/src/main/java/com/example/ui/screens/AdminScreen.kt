@@ -956,6 +956,7 @@ private fun AdminAccountsTab(
     var editingDocId by remember { mutableStateOf("") }
     var editingExistingCreatedAt by remember { mutableStateOf<com.google.firebase.Timestamp?>(null) }
     var selectedRole by remember { mutableStateOf("STUDENT") }
+    var extraRoles by remember { mutableStateOf<Set<String>>(emptySet()) }
     var fullName by remember { mutableStateOf("") }
     var userId by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -981,6 +982,7 @@ private fun AdminAccountsTab(
     fun resetForm() {
         editingDocId = ""
         editingExistingCreatedAt = null
+        extraRoles = emptySet()
         fullName = ""
         userId = if (selectedRole == "STUDENT") SchoolCatalog.nextStudentRollNumber(users) else ""
         password = ""
@@ -1042,6 +1044,7 @@ private fun AdminAccountsTab(
                                 selected = selectedRole == rKey,
                                 onClick = {
                                     selectedRole = rKey
+                                    if (rKey != "TEACHER") extraRoles = emptySet()
                                     if (editingDocId.isBlank()) {
                                         userId = if (rKey == "STUDENT") SchoolCatalog.nextStudentRollNumber(users) else ""
                                     }
@@ -1049,6 +1052,42 @@ private fun AdminAccountsTab(
                                 label = { Text(label) },
                                 modifier = Modifier.testTag("admin_create_role_$rKey"),
                             )
+                        }
+                    }
+
+                    if (selectedRole == "TEACHER") {
+                        Text(
+                            "EXTRA ROLES FOR THIS TEACHER (MULTI-ROLE ACCESS)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        ) {
+                            FilterChip(
+                                selected = true,
+                                onClick = {},
+                                label = { Text("Teacher (Primary)") },
+                                leadingIcon = { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                            )
+                            listOf(
+                                "FEE_MANAGER" to "Fee Manager",
+                                "ADMIN" to "Principal / Admin",
+                            ).forEach { (extraKey, extraLabel) ->
+                                val picked = extraKey in extraRoles
+                                FilterChip(
+                                    selected = picked,
+                                    onClick = {
+                                        extraRoles = if (picked) extraRoles - extraKey else extraRoles + extraKey
+                                    },
+                                    label = { Text(extraLabel) },
+                                    leadingIcon = if (picked) {
+                                        { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                    } else null,
+                                    modifier = Modifier.testTag("admin_teacher_extra_role_$extraKey"),
+                                )
+                            }
                         }
                     }
 
@@ -1143,6 +1182,9 @@ private fun AdminAccountsTab(
                         val suggestedSubjects = remember(className) {
                             (SchoolCatalog.subjectsForClass(className) + SchoolCatalog.allSubjects).distinct()
                         }
+                        val selectedSubjectTokens = remember(subject) {
+                            subject.split(",").map { it.trim() }.filter { it.isNotBlank() }.toSet()
+                        }
                         Box(modifier = Modifier.fillMaxWidth()) {
                             OutlinedButton(
                                 onClick = { subjectMenuExpanded = true },
@@ -1151,18 +1193,26 @@ private fun AdminAccountsTab(
                             ) {
                                 Icon(Icons.Filled.Book, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(8.dp))
-                                Text("Select Subject: ${subject.ifBlank { "Choose" }}")
+                                Text("Subjects (Multi-Select): ${subject.ifBlank { "Choose" }}")
                             }
                             DropdownMenu(
                                 expanded = subjectMenuExpanded,
                                 onDismissRequest = { subjectMenuExpanded = false },
                             ) {
                                 suggestedSubjects.forEach { sub ->
+                                    val isChecked = sub in selectedSubjectTokens
                                     DropdownMenuItem(
                                         text = { Text(sub) },
+                                        leadingIcon = {
+                                            Checkbox(checked = isChecked, onCheckedChange = null)
+                                        },
                                         onClick = {
-                                            subject = sub
-                                            subjectMenuExpanded = false
+                                            val updated = if (isChecked) {
+                                                selectedSubjectTokens - sub
+                                            } else {
+                                                selectedSubjectTokens + sub
+                                            }
+                                            subject = updated.joinToString(", ")
                                         },
                                     )
                                 }
@@ -1171,7 +1221,7 @@ private fun AdminAccountsTab(
                         OutlinedTextField(
                             value = subject,
                             onValueChange = { subject = it },
-                            label = { Text("Teaching Subject (or type custom)") },
+                            label = { Text("Teaching Subject(s) (comma-separated)") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
@@ -1213,10 +1263,14 @@ private fun AdminAccountsTab(
                                 "ADMIN" -> "All Wings"
                                 else -> SchoolCatalog.wingForClass(className)
                             }
+                            val finalExtraRoles = if (selectedRole == "TEACHER") extraRoles.toList() else emptyList()
                             onSaveUser(
                                 SchoolUser(
                                     id = editingDocId,
                                     role = selectedRole,
+                                    primaryRole = selectedRole,
+                                    roles = (listOf(selectedRole) + finalExtraRoles).distinct(),
+                                    extraRoles = finalExtraRoles,
                                     userId = userId.trim(),
                                     password = password.trim(),
                                     fullName = fullName.trim(),
@@ -1295,7 +1349,7 @@ private fun AdminAccountsTab(
                             Text(u.fullName, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                             Surface(color = GoldSoft, shape = RoundedCornerShape(6.dp)) {
                                 Text(
-                                    u.role.replace('_', ' '),
+                                    u.effectiveRoles().joinToString(" + ") { it.replace('_', ' ') },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = NavyDeep,
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
@@ -1317,7 +1371,8 @@ private fun AdminAccountsTab(
                             onClick = {
                                 editingDocId = u.id
                                 editingExistingCreatedAt = u.createdAt
-                                selectedRole = u.role
+                                selectedRole = u.primaryRole.ifBlank { u.role }
+                                extraRoles = u.extraRoles.toSet()
                                 fullName = u.fullName
                                 userId = u.userId
                                 password = u.password
