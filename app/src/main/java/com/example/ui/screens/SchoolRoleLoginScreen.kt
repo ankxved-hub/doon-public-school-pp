@@ -46,6 +46,7 @@ fun SchoolRoleLoginScreen(
     onGoogleSignOut: () -> Unit,
     isCloudflareMode: Boolean = false,
     cloudflareServerUrl: String = "",
+    cloudflareConnectionError: String? = null,
     canDisconnectCustomCloudflare: Boolean = false,
     onConnectCloudflare: (suspend (String) -> String?)? = null,
     onDisconnectCustomCloudflare: (() -> Unit)? = null,
@@ -203,9 +204,51 @@ fun SchoolRoleLoginScreen(
                                 TextButton(onClick = onGoogleSignOut) {
                                     Text("Switch Google", style = MaterialTheme.typography.labelSmall)
                                 }
-                            } else if (canDisconnectCustomCloudflare && onDisconnectCustomCloudflare != null) {
-                                TextButton(onClick = { showCloudflareDialog = true }) {
-                                    Text("Server URL", style = MaterialTheme.typography.labelSmall)
+                            } else if (onConnectCloudflare != null) {
+                                TextButton(
+                                    onClick = { showCloudflareDialog = true },
+                                    modifier = Modifier.testTag("login_edit_cloudflare_server_btn"),
+                                ) {
+                                    Text("Server", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
+
+                    if (!isCloudflareMode && onConnectCloudflare != null) {
+                        Surface(
+                            color = GoldSoft,
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, GoldAmber),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Icon(Icons.Filled.CloudQueue, contentDescription = null, tint = NavyDeep, modifier = Modifier.size(22.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Google Account Mode Active",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = NavyDeep,
+                                    )
+                                    Text(
+                                        text = "Tap Connect to sync directly with your school's Cloudflare workers.dev database.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = NavyDeep.copy(alpha = 0.85f),
+                                    )
+                                }
+                                Button(
+                                    onClick = { showCloudflareDialog = true },
+                                    colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                    modifier = Modifier.heightIn(min = 48.dp).testTag("login_banner_connect_cloudflare_btn"),
+                                ) {
+                                    Text("Connect", fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -304,7 +347,11 @@ fun SchoolRoleLoginScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                             ) {
                                 Text(
-                                    text = "Weak connection. Tap Reconnect to refresh.",
+                                    text = if (isCloudflareMode && !cloudflareConnectionError.isNullOrBlank()) {
+                                        "Cloudflare issue: $cloudflareConnectionError"
+                                    } else {
+                                        "Weak connection. Tap Reconnect to refresh."
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = NavyDeep,
                                     modifier = Modifier.weight(1f),

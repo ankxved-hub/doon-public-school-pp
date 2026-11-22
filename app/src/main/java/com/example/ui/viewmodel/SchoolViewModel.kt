@@ -102,6 +102,8 @@ class SchoolViewModel(
     private val _cfDashboard = MutableStateFlow<CloudflareDashboardData?>(null)
     private val _needsCloudflareAdminSetup = MutableStateFlow(false)
     val needsCloudflareAdminSetup: StateFlow<Boolean> = _needsCloudflareAdminSetup.asStateFlow()
+    private val _cloudflareConnectionError = MutableStateFlow<String?>(null)
+    val cloudflareConnectionError: StateFlow<String?> = _cloudflareConnectionError.asStateFlow()
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun <T> observeStateFlow(
@@ -305,10 +307,14 @@ class SchoolViewModel(
             if (isCloudflareMode) {
                 CloudflareApiClient.getBootstrapStatus()
                     .onSuccess { boot ->
+                        _cloudflareConnectionError.value = null
                         _needsCloudflareAdminSetup.value = boot.needsSetup
                         checkForAppUpdate(boot.appUpdate, manual = false)
                     }
-                    .onFailure { e -> Log.w(TAG, "Cloudflare bootstrap check failed", e) }
+                    .onFailure { e ->
+                        Log.w(TAG, "Cloudflare bootstrap check failed", e)
+                        _cloudflareConnectionError.value = e.localizedMessage ?: "Unable to reach Cloudflare Edge server."
+                    }
 
                 val saved = sessionPrefs.savedRoleSession(ownerUid).first()
                 if (saved != null && saved.cloudflareToken.isNotBlank()) {
@@ -380,8 +386,12 @@ class SchoolViewModel(
             if (isCloudflareMode) {
                 val bootRes = CloudflareApiClient.getBootstrapStatus()
                     .onSuccess { boot ->
+                        _cloudflareConnectionError.value = null
                         _needsCloudflareAdminSetup.value = boot.needsSetup
                         checkForAppUpdate(boot.appUpdate, manual = false)
+                    }
+                    .onFailure { e ->
+                        _cloudflareConnectionError.value = e.localizedMessage ?: "Unable to reach Cloudflare Edge server."
                     }
                 val tok = _cfToken.value
                 if (!tok.isNullOrBlank()) {

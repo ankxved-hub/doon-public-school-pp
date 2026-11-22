@@ -22,42 +22,110 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Setup Android SDK Command-Line Tools
-        uses: android-actions/setup-android@v4
-        with:
-          packages: ''
-
-      - name: Install Android SDK 36 / 36.1 & Build Tools
+      - name: Prepare Android SDK 36 & Build Tools
+        shell: bash
         run: |
+          set -euo pipefail
+
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          mkdir -p "$SDK_ROOT"
           if [ ! -w "$SDK_ROOT" ]; then
             sudo chown -R "$(id -u):$(id -g)" "$SDK_ROOT" 2>/dev/null || true
           fi
-          mkdir -p "$SDK_ROOT/licenses"
 
-          SDKMANAGER="$(command -v sdkmanager || find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1)"
-          if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found under $SDK_ROOT"
-            exit 1
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+
+          SDKMANAGER=""
+          if [ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          else
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1 || true)"
           fi
 
-          yes | "$SDKMANAGER" --licenses --sdk_root="$SDK_ROOT" >/dev/null 2>&1 || true
-          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "cmdline-tools;latest" >/dev/null 2>&1 || true
-          if [ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "cmdline-tools not found under $SDK_ROOT — downloading official Google Android command-line tools..."
+            TMP_ZIP="/tmp/android-cmdline-tools.zip"
+            TMP_DIR="/tmp/android-cmdline-extract"
+            rm -rf "$TMP_ZIP" "$TMP_DIR"
+            curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o "$TMP_ZIP"
+            unzip -q "$TMP_ZIP" -d "$TMP_DIR"
+            mkdir -p "$SDK_ROOT/cmdline-tools"
+            rm -rf "$SDK_ROOT/cmdline-tools/latest"
+            mv "$TMP_DIR/cmdline-tools" "$SDK_ROOT/cmdline-tools/latest"
+            chmod +x "$SDK_ROOT/cmdline-tools/latest/bin/"*
             SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           fi
 
-          yes | "$SDKMANAGER" --licenses --sdk_root="$SDK_ROOT" >/dev/null 2>&1 || true
-          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platform-tools" "build-tools;36.0.0" || \
-            "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platform-tools" "build-tools;35.0.0"
+          echo "Using sdkmanager: $SDKMANAGER"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
-          if ! "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platforms;android-36.1"; then
-            echo "platforms;android-36.1 unavailable — installing stable platforms;android-36"
-            "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platforms;android-36"
-          fi
+          mkdir -p "$SDK_ROOT/licenses"
+          # Ensure standard Android SDK license hashes are accepted before invoking sdkmanager
+          cat <<'EOF' > "$SDK_ROOT/licenses/android-sdk-license"
+          8933bad161af4178b1185d1a37fbf41ea5269c55
+          d56f5187479451eabf01fb78af6dfcb131a6481e
+          24333f8a63b6825ea9c5514f83c2829b004d1fee
+          EOF
+
+          set +o pipefail
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
+          set -o pipefail
+
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install \
+            "platform-tools" \
+            "build-tools;36.0.0" \
+            "platforms;android-36"
 
           echo "=== Installed SDK Platforms & Build Tools ==="
           ls -la "$SDK_ROOT/platforms" "$SDK_ROOT/build-tools"
+
+          if [ ! -d "$SDK_ROOT/platforms/android-36" ] && [ ! -d "$SDK_ROOT/platforms/android-36.1" ]; then
+            echo "ERROR: Android SDK 36 platform directory missing after installation."
+            exit 1
+          fi
+
+      - name: Normalize & Verify Cloudflare Worker URL Secret
+        shell: bash
+        env:
+          RAW_CF_URL: ${{ secrets.CLOUDFLARE_API_URL }}
+        run: |
+          set -euo pipefail
+
+          CLEAN_CF_URL="$(python3 - <<'PY'
+          import os
+          from urllib.parse import urlparse
+
+          raw = (os.environ.get("RAW_CF_URL") or "").strip().strip('"').strip("'").strip()
+          if not raw:
+              print("")
+              raise SystemExit(0)
+          if not raw.lower().startswith(("http://", "https://")):
+              raw = "https://" + raw
+          parsed = urlparse(raw)
+          if not parsed.netloc:
+              print("")
+              raise SystemExit(0)
+          scheme = parsed.scheme.lower()
+          host = parsed.netloc.strip()
+          print(f"{scheme}://{host}")
+          PY
+          )"
+
+          echo "CLEAN_CLOUDFLARE_API_URL=$CLEAN_CF_URL" >> "$GITHUB_ENV"
+
+          if [ -n "$CLEAN_CF_URL" ]; then
+            CF_HOST="$(python3 -c 'import sys; from urllib.parse import urlparse; print(urlparse(sys.argv[1]).hostname or "")' "$CLEAN_CF_URL")"
+            echo "CLOUDFLARE_API_URL secret normalized cleanly (host=$CF_HOST)."
+            if curl -fsS --max-time 10 "$CLEAN_CF_URL/api/bootstrap/status" >/dev/null 2>&1; then
+              echo "Cloudflare Worker health check PASSED (/api/bootstrap/status reachable)."
+            else
+              echo "::warning::Could not reach $CLEAN_CF_URL/api/bootstrap/status during CI probe; URL will still be compiled into the APK."
+            fi
+          else
+            echo "::warning::secrets.CLOUDFLARE_API_URL is empty or invalid — APK will show the Cloudflare Server Setup screen on first launch."
+          fi
 
       - name: Setup Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
@@ -65,7 +133,10 @@ jobs:
           gradle-version: '9.3.1'
 
       - name: Decode & Verify Signing Keystore
+        shell: bash
         run: |
+          set -euo pipefail
+
           if [ -f "debug.keystore.base64" ]; then
             base64 -d debug.keystore.base64 > debug.keystore
           else
@@ -82,21 +153,18 @@ jobs:
           fi
 
           if [ ! -s "debug.keystore" ]; then
-            echo "ERROR: debug.keystore is empty or failed to decode"
+            echo "ERROR: debug.keystore is empty or failed to decode."
             exit 1
           fi
 
           keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey
 
       - name: Build Android APK & App Bundle (Gradle --no-daemon)
+        shell: bash
         env:
-          CLOUDFLARE_API_URL: ${{ secrets.CLOUDFLARE_API_URL }}
+          CLOUDFLARE_API_URL: ${{ env.CLEAN_CLOUDFLARE_API_URL }}
         run: |
-          if [ -n "$CLOUDFLARE_API_URL" ]; then
-            echo "CLOUDFLARE_API_URL secret detected (length=${#CLOUDFLARE_API_URL})."
-          else
-            echo "WARNING: secrets.CLOUDFLARE_API_URL is EMPTY — APK will allow connecting Cloudflare URL inside the app."
-          fi
+          set -euo pipefail
 
           gradle assembleDebug bundleDebug \
             --no-daemon \
@@ -106,7 +174,10 @@ jobs:
             -PCLOUDFLARE_API_URL="$CLOUDFLARE_API_URL"
 
       - name: Align, Sign (v1/v2/v3) & Validate APK Package
+        shell: bash
         run: |
+          set -euo pipefail
+
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           RAW_APK="app/build/outputs/apk/debug/app-debug.apk"
           RAW_AAB="app/build/outputs/bundle/debug/app-debug.aab"

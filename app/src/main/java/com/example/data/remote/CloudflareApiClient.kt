@@ -7,9 +7,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.ConnectException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
+import java.net.URI
 import java.net.URL
 import java.net.URLEncoder
+import java.net.UnknownHostException
 
 data class CloudflareAuthSession(
     val token: String,
@@ -52,15 +56,15 @@ object CloudflareApiClient {
         if (!cleaned.startsWith("http://", ignoreCase = true) && !cleaned.startsWith("https://", ignoreCase = true)) {
             cleaned = "https://$cleaned"
         }
-        cleaned = cleaned.trimEnd('/')
-        if (cleaned.endsWith("/api", ignoreCase = true)) {
-            cleaned = cleaned.dropLast(4).trimEnd('/')
-        }
-        val isHttps = cleaned.startsWith("https://", ignoreCase = true)
-        val isLocalHttp = cleaned.startsWith("http://10.0.2.2", ignoreCase = true) ||
-            cleaned.startsWith("http://127.0.0.1", ignoreCase = true) ||
-            cleaned.startsWith("http://localhost", ignoreCase = true)
-        return if (isHttps || isLocalHttp) cleaned else ""
+        val parsed = runCatching { URI(cleaned) }.getOrNull() ?: return ""
+        val scheme = parsed.scheme?.lowercase() ?: return ""
+        val host = parsed.host?.trim()?.lowercase() ?: return ""
+        if (host.isEmpty() || host.any { it.isWhitespace() }) return ""
+        val portPart = if (parsed.port != -1) ":${parsed.port}" else ""
+        val origin = "$scheme://$host$portPart"
+        val isHttps = scheme == "https"
+        val isLocalHttp = scheme == "http" && (host == "10.0.2.2" || host == "127.0.0.1" || host == "localhost")
+        return if (isHttps || isLocalHttp) origin else ""
     }
 
     fun setRuntimeServerUrl(url: String) {
@@ -77,10 +81,20 @@ object CloudflareApiClient {
     suspend fun verifyServerUrl(candidateUrl: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val normalized = normalizeServerUrl(candidateUrl)
-            require(normalized.isNotBlank()) { "Enter a valid HTTPS Cloudflare Worker URL (e.g. https://your-school.workers.dev)." }
-            val parsed = requestJsonWithBase(normalized, "GET", "/api/bootstrap/status")
+            require(normalized.isNotBlank()) {
+                "Enter a valid HTTPS Cloudflare Worker URL (e.g. https://doon-public-school-etah.yourname.workers.dev)."
+            }
+            val parsed = try {
+                requestJsonWithBase(normalized, "GET", "/api/bootstrap/status")
+            } catch (_: UnknownHostException) {
+                throw IllegalStateException("Server address not found. Check spelling of your workers.dev URL and internet connection.")
+            } catch (_: SocketTimeoutException) {
+                throw IllegalStateException("Cloudflare server timed out. Check your internet connection and try again.")
+            } catch (_: ConnectException) {
+                throw IllegalStateException("Could not connect to $normalized. Ensure your Cloudflare Worker is deployed.")
+            }
             if (!parsed.has("needsSetup")) {
-                throw IllegalStateException("This URL did not respond as a Doon Public School Cloudflare Worker.")
+                throw IllegalStateException("Connected to $normalized, but it did not respond as the Doon Public School Cloudflare Worker.")
             }
             normalized
         }

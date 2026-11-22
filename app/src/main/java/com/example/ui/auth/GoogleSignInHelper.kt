@@ -176,19 +176,20 @@ fun GoogleAuthGateScreen(
     val credentialManager = remember(context) { CredentialManager.create(context) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var showCloudflareSetup by remember { mutableStateOf(false) }
     var cfUrlInput by remember { mutableStateOf("") }
     var cfConnecting by remember { mutableStateOf(false) }
     var cfError by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) {
-        attemptAutoSignIn(
-            context = context,
-            credentialManager = credentialManager,
-            onAuthSuccess = onAuthSuccess,
-            onUnauthenticated = {},
-            scope = scope,
-        )
+    LaunchedEffect(onConnectCloudflare == null) {
+        if (onConnectCloudflare == null) {
+            attemptAutoSignIn(
+                context = context,
+                credentialManager = credentialManager,
+                onAuthSuccess = onAuthSuccess,
+                onUnauthenticated = {},
+                scope = scope,
+            )
+        }
     }
 
     Box(
@@ -277,19 +278,101 @@ fun GoogleAuthGateScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Filled.Security, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    if (onConnectCloudflare != null) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Filled.CloudDone, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Text(
+                                text = "Connect Cloudflare Edge Server",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
                         Text(
-                            text = "Official Cloud School ERP Portal",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            text = "Paste your school's Cloudflare workers.dev URL to sync live with the website and D1 database (no Google Sign-In required).",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        OutlinedTextField(
+                            value = cfUrlInput,
+                            onValueChange = {
+                                cfUrlInput = it
+                                cfError = null
+                            },
+                            label = { Text("Cloudflare Worker URL") },
+                            placeholder = { Text("https://doon-public-school-etah.yourname.workers.dev") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("cloudflare_gate_url_input"),
+                        )
+                        if (cfError != null) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(
+                                    text = cfError.orEmpty(),
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(12.dp),
+                                )
+                            }
+                        }
+                        Button(
+                            onClick = {
+                                if (!cfConnecting) {
+                                    scope.launch {
+                                        cfConnecting = true
+                                        cfError = onConnectCloudflare(cfUrlInput)
+                                        cfConnecting = false
+                                    }
+                                }
+                            },
+                            enabled = !cfConnecting,
+                            colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 52.dp)
+                                .testTag("cloudflare_gate_connect_btn"),
+                        ) {
+                            if (cfConnecting) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    color = GoldAmber,
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Text("Verifying Cloudflare Server...", fontWeight = FontWeight.Bold)
+                            } else {
+                                Icon(Icons.Filled.CloudDone, contentDescription = null, modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Text("Verify & Connect Cloudflare Edge", fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
+
+                        Text(
+                            text = "Optional Firebase Fallback (Google Account)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Filled.Security, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Text(
+                                text = "Official Cloud School ERP Portal",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                        Text(
+                            text = "Sign in with your Google Account to establish encrypted Firestore cloud sync, then choose your School Role (Principal, Teacher, Fee Manager, or Student/Parent).",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Text(
-                        text = "Sign in with your Google Account to establish encrypted Firestore cloud sync, then choose your School Role (Principal, Teacher, Fee Manager, or Student/Parent).",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -341,7 +424,7 @@ fun GoogleAuthGateScreen(
                         }
                     }
 
-                    Button(
+                    OutlinedButton(
                         onClick = {
                             errorMessage = null
                             isLoading = true
@@ -361,80 +444,21 @@ fun GoogleAuthGateScreen(
                             )
                         },
                         enabled = !isLoading,
-                        colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(52.dp)
+                            .heightIn(min = 48.dp)
                             .testTag("google_sign_in_button"),
                     ) {
                         if (isLoading) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(22.dp),
-                                color = GoldAmber,
+                                modifier = Modifier.size(20.dp),
                                 strokeWidth = 2.dp,
                             )
                         } else {
-                            Icon(Icons.Filled.School, contentDescription = null, modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(10.dp))
-                            Text("Sign in with Google", fontWeight = FontWeight.Bold)
-                        }
-                    }
-                    if (onConnectCloudflare != null) {
-                        HorizontalDivider()
-                        TextButton(
-                            onClick = { showCloudflareSetup = !showCloudflareSetup },
-                            modifier = Modifier.fillMaxWidth().testTag("toggle_cloudflare_gate_setup"),
-                        ) {
-                            Icon(Icons.Filled.CloudDone, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Filled.School, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text(
-                                if (showCloudflareSetup) "Hide Cloudflare Edge Setup" else "Connect Cloudflare Edge Server Instead",
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                        if (showCloudflareSetup) {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedTextField(
-                                    value = cfUrlInput,
-                                    onValueChange = {
-                                        cfUrlInput = it
-                                        cfError = null
-                                    },
-                                    label = { Text("Cloudflare Worker URL") },
-                                    placeholder = { Text("https://doon-public-school-etah....workers.dev") },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth().testTag("cloudflare_gate_url_input"),
-                                )
-                                if (cfError != null) {
-                                    Text(
-                                        text = cfError.orEmpty(),
-                                        color = MaterialTheme.colorScheme.error,
-                                        style = MaterialTheme.typography.bodySmall,
-                                    )
-                                }
-                                OutlinedButton(
-                                    onClick = {
-                                        if (!cfConnecting) {
-                                            scope.launch {
-                                                cfConnecting = true
-                                                cfError = onConnectCloudflare(cfUrlInput)
-                                                cfConnecting = false
-                                            }
-                                        }
-                                    },
-                                    enabled = !cfConnecting,
-                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("cloudflare_gate_connect_btn"),
-                                ) {
-                                    if (cfConnecting) {
-                                        CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
-                                        Spacer(Modifier.width(8.dp))
-                                        Text("Verifying Server...")
-                                    } else {
-                                        Text("Verify & Connect Cloudflare Edge", fontWeight = FontWeight.Bold)
-                                    }
-                                }
-                            }
+                            Text("Sign in with Google Instead", fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }

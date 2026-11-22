@@ -1,4 +1,5 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.net.URI
 import java.time.Duration
 
 plugins {
@@ -39,11 +40,20 @@ android {
     val sysEnvUrl = System.getenv("CLOUDFLARE_API_URL")?.trim()?.takeIf { it.isNotEmpty() }
     val cfUrlRaw = (propUrl ?: sysEnvUrl ?: envUrl ?: "")
       .trim().trim('"', '\'').trim()
-    val cfUrlNormalized = if (cfUrlRaw.isNotEmpty() && !cfUrlRaw.startsWith("http://", ignoreCase = true) && !cfUrlRaw.startsWith("https://", ignoreCase = true)) {
+    val cfUrlWithScheme = if (cfUrlRaw.isNotEmpty() && !cfUrlRaw.startsWith("http://", ignoreCase = true) && !cfUrlRaw.startsWith("https://", ignoreCase = true)) {
       "https://$cfUrlRaw"
     } else {
       cfUrlRaw
-    }.trimEnd('/')
+    }
+    val cfUrlNormalized = runCatching {
+      if (cfUrlWithScheme.isEmpty()) "" else {
+        val uri = URI(cfUrlWithScheme)
+        val scheme = uri.scheme?.lowercase() ?: ""
+        val host = uri.host?.trim() ?: ""
+        val port = if (uri.port != -1) ":${uri.port}" else ""
+        if ((scheme == "https" || scheme == "http") && host.isNotEmpty()) "$scheme://$host$port" else ""
+      }
+    }.getOrDefault("")
     val cfUrl = cfUrlNormalized
       .replace("\\", "\\\\")
       .replace("\"", "\\\"")

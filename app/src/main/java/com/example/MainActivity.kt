@@ -209,6 +209,7 @@ private fun AuthenticatedSchoolShell(
     val isRestoringSavedSession by viewModel.isRestoringSavedSession.collectAsStateWithLifecycle()
     val isSeeding by viewModel.isSeeding.collectAsStateWithLifecycle()
     val needsCloudflareAdminSetup by viewModel.needsCloudflareAdminSetup.collectAsStateWithLifecycle()
+    val cloudflareConnectionError by viewModel.cloudflareConnectionError.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
 
     val usersUi by viewModel.usersState.collectAsStateWithLifecycle()
@@ -318,7 +319,8 @@ private fun AuthenticatedSchoolShell(
             } else {
                 SchoolRoleLoginScreen(
                     isSeeding = isSeeding,
-                    isSyncError = usersUi is DataUiState.Error,
+                    isSyncError = (usersUi is DataUiState.Error) || (viewModel.isCloudflareMode && cloudflareConnectionError != null),
+                    cloudflareConnectionError = cloudflareConnectionError,
                     googleEmail = googleEmail,
                     isDarkMode = isDarkMode,
                     onToggleDarkMode = onToggleDarkMode,
