@@ -212,18 +212,22 @@ jobs:
             echo "========================================================"
             echo "EXACT GRADLE FAILURE SUMMARY (READ THIS)"
             echo "========================================================"
-            SUMMARY="$(awk '
-              /^> Task .* FAILED/ { print }
-              /^e: / { print }
-              /^FAILURE:/ { show=1 }
-              show { print }
-            ' /tmp/gradle-build.log | head -n 45)"
-            echo "$SUMMARY"
+            FAILURE_BLOCK="$(awk '/^FAILURE:/ { show=1 } show { print }' /tmp/gradle-build.log | head -n 25)"
+            COMPILER_ERRORS="$(grep -E "^(> Task .* FAILED|e: )" /tmp/gradle-build.log | tail -n 25 || true)"
+            echo "$FAILURE_BLOCK"
+            if [ -n "$COMPILER_ERRORS" ]; then
+              echo "--- COMPILER / TASK ERRORS ---"
+              echo "$COMPILER_ERRORS"
+            fi
             echo "========================================================"
             {
               echo "### Gradle APK Build Failure Summary"
               echo '```text'
-              echo "$SUMMARY"
+              echo "$FAILURE_BLOCK"
+              if [ -n "$COMPILER_ERRORS" ]; then
+                echo "--- COMPILER / TASK ERRORS ---"
+                echo "$COMPILER_ERRORS"
+              fi
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             exit "$BUILD_EXIT"

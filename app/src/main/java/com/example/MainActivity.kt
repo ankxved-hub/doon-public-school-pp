@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -57,6 +58,7 @@ import com.example.ui.viewmodel.AppUpdateState
 import com.example.ui.viewmodel.DataUiState
 import com.example.ui.viewmodel.SchoolViewModel
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
@@ -89,7 +91,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private fun authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
+private fun authStateFlow(context: Context): Flow<FirebaseUser?> = callbackFlow {
+    if (FirebaseApp.getApps(context.applicationContext).isEmpty()) {
+        trySend(null)
+        awaitClose {}
+        return@callbackFlow
+    }
     val auth = Firebase.auth
     val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
         trySend(firebaseAuth.currentUser)
@@ -142,7 +149,14 @@ private fun DpsEtahAppRoot(
     }
 
     val credentialManager = remember(context) { CredentialManager.create(context) }
-    val currentUser by authStateFlow().collectAsStateWithLifecycle(initialValue = Firebase.auth.currentUser)
+    val initialFirebaseUser = remember(context) {
+        if (FirebaseApp.getApps(context.applicationContext).isNotEmpty()) {
+            runCatching { Firebase.auth.currentUser }.getOrNull()
+        } else {
+            null
+        }
+    }
+    val currentUser by authStateFlow(context).collectAsStateWithLifecycle(initialValue = initialFirebaseUser)
 
     val uid = if (useCloudflare) "cloudflare_edge" else currentUser?.uid
     if (uid == null) {

@@ -2,9 +2,10 @@ package com.example.data.repository
 
 import android.content.Context
 import android.util.Log
-import com.example.R
 import com.example.data.model.*
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.CollectionReference
 import com.google.firebase.firestore.DocumentReference
@@ -37,19 +38,31 @@ data class GitHubReleaseInfo(
     val notes: String,
 )
 
-class SchoolRepository(private val db: FirebaseFirestore) {
+private fun resolveFirestoreInstance(context: Context): FirebaseFirestore? {
+    val appContext = context.applicationContext
+    if (FirebaseApp.getApps(appContext).isEmpty()) return null
+    val resId = appContext.resources.getIdentifier("firestore_database_id", "string", appContext.packageName)
+    val dbId = if (resId != 0) runCatching { appContext.getString(resId) }.getOrNull().orEmpty().trim() else ""
+    return runCatching {
+        if (dbId.isNotEmpty()) FirebaseFirestore.getInstance(dbId) else FirebaseFirestore.getInstance()
+    }.getOrNull()
+}
 
-    constructor(context: Context) : this(
-        FirebaseFirestore.getInstance(
-            context.applicationContext.getString(R.string.firestore_database_id)
-        )
-    )
+class SchoolRepository(private val dbOrNull: FirebaseFirestore?) {
 
-    private val auth = Firebase.auth
+    constructor(context: Context) : this(resolveFirestoreInstance(context))
+
+    private val db: FirebaseFirestore
+        get() = dbOrNull
+            ?: throw IllegalStateException("Firebase Firestore is not configured in this build. Connect your Cloudflare Worker URL.")
+
+    private val authOrNull: FirebaseAuth?
+        get() = runCatching { Firebase.auth }.getOrNull()
+
     private val schoolId = SchoolInfo.SCHOOL_ID
 
     private fun requireUserId(): String =
-        auth.currentUser?.uid
+        authOrNull?.currentUser?.uid
             ?: throw IllegalStateException("User must be signed in with Google before accessing Firestore.")
 
     private fun safeDocId(raw: String): String =
@@ -105,7 +118,7 @@ class SchoolRepository(private val db: FirebaseFirestore) {
                         .firstOrNull()
                     if (firestoreError == null && error is CancellationException) throw error
                     val exceptionToLog = firestoreError ?: (error as? Exception)
-                    if (exceptionToLog != null && auth.currentUser?.uid == uid) {
+                    if (exceptionToLog != null && authOrNull?.currentUser?.uid == uid) {
                         handleFirestoreError(exceptionToLog, OperationType.LIST, "schools/$schoolId/$collectionName")
                     }
                     throw error
@@ -131,7 +144,7 @@ class SchoolRepository(private val db: FirebaseFirestore) {
     fun observeTimetables(): Flow<List<ClassTimetable>> = observeCollection("timetables", ClassTimetable::class.java)
 
     suspend fun isCurrentMemberReady(): Boolean {
-        val uid = auth.currentUser?.uid ?: return false
+        val uid = authOrNull?.currentUser?.uid ?: return false
         return try {
             col("members").document(uid).get().await().exists()
         } catch (_: Exception) {
@@ -140,7 +153,7 @@ class SchoolRepository(private val db: FirebaseFirestore) {
     }
 
     suspend fun clearCurrentMemberSession() {
-        val uid = auth.currentUser?.uid ?: return
+        val uid = authOrNull?.currentUser?.uid ?: return
         try {
             col("members").document(uid).delete().await()
         } catch (e: Exception) {
