@@ -28,7 +28,16 @@ android {
         .firstOrNull { it.trim().startsWith("CLOUDFLARE_API_URL=") }
         ?.substringAfter("=")?.trim()?.trim('"', '\'')
     } else null
-    val cfUrl = (System.getenv("CLOUDFLARE_API_URL") ?: envUrl ?: "").trim()
+    val propUrl = project.findProperty("CLOUDFLARE_API_URL")?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+    val sysEnvUrl = System.getenv("CLOUDFLARE_API_URL")?.trim()?.takeIf { it.isNotEmpty() }
+    val cfUrlRaw = (propUrl ?: sysEnvUrl ?: envUrl ?: "")
+      .trim().trim('"', '\'').trim()
+    val cfUrlNormalized = if (cfUrlRaw.isNotEmpty() && !cfUrlRaw.startsWith("http://", ignoreCase = true) && !cfUrlRaw.startsWith("https://", ignoreCase = true)) {
+      "https://$cfUrlRaw"
+    } else {
+      cfUrlRaw
+    }.trimEnd('/')
+    val cfUrl = cfUrlNormalized
       .replace("\\", "\\\\")
       .replace("\"", "\\\"")
     buildConfigField("String", "CLOUDFLARE_API_URL", "\"$cfUrl\"")

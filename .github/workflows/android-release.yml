@@ -30,6 +30,12 @@ jobs:
         env:
           CLOUDFLARE_API_URL: ${{ secrets.CLOUDFLARE_API_URL }}
         run: |
+          if [ -n "$CLOUDFLARE_API_URL" ]; then
+            echo "CLOUDFLARE_API_URL secret detected (length=${#CLOUDFLARE_API_URL})."
+          else
+            echo "WARNING: secrets.CLOUDFLARE_API_URL is EMPTY — APK will default to Firebase until connected in app."
+          fi
+
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36.1" "build-tools;36.0.0"
 
@@ -37,7 +43,7 @@ jobs:
             base64 -d debug.keystore.base64 > debug.keystore
           fi
 
-          gradle assembleDebug --no-daemon
+          gradle assembleDebug --no-daemon -PCLOUDFLARE_API_URL="$CLOUDFLARE_API_URL"
 
           ZIPALIGN="$ANDROID_HOME/build-tools/36.0.0/zipalign"
           APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"

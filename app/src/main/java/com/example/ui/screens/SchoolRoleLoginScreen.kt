@@ -45,6 +45,10 @@ fun SchoolRoleLoginScreen(
     onLoginRole: suspend (role: String, userId: String, password: String) -> String?,
     onGoogleSignOut: () -> Unit,
     isCloudflareMode: Boolean = false,
+    cloudflareServerUrl: String = "",
+    canDisconnectCustomCloudflare: Boolean = false,
+    onConnectCloudflare: (suspend (String) -> String?)? = null,
+    onDisconnectCustomCloudflare: (() -> Unit)? = null,
     needsCloudflareAdminSetup: Boolean = false,
     onClaimCloudflareAdmin: suspend (fullName: String, userId: String, phone: String, password: String) -> String? = { _, _, _, _ -> null },
     appUpdateState: AppUpdateState = AppUpdateState.Idle,
@@ -65,6 +69,11 @@ fun SchoolRoleLoginScreen(
     var adminId by remember { mutableStateOf("ADMIN01") }
     var adminPhone by remember { mutableStateOf("") }
     var adminPassword by remember { mutableStateOf("") }
+
+    var showCloudflareDialog by remember { mutableStateOf(false) }
+    var cfUrlInput by remember(cloudflareServerUrl) { mutableStateOf(cloudflareServerUrl) }
+    var cfConnecting by remember { mutableStateOf(false) }
+    var cfError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(isSyncError) {
         if (!isSyncError && errorMsg?.startsWith("Refreshing") == true) {
@@ -156,14 +165,20 @@ fun SchoolRoleLoginScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("School ERP Role Login", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                            val hostLabel = remember(cloudflareServerUrl) {
+                                cloudflareServerUrl
+                                    .removePrefix("https://")
+                                    .removePrefix("http://")
+                                    .substringBefore("/")
+                            }
                             Text(
                                 text = if (isCloudflareMode) {
-                                    "Cloudflare Edge Synced (Website + App Live)"
+                                    "Cloudflare Edge Connected" + if (hostLabel.isNotBlank()) " ($hostLabel)" else ""
                                 } else {
-                                    "Cloud Synced: ${googleEmail ?: "Google Account"}"
+                                    "Google Account Sync: ${googleEmail ?: "Signed In"}"
                                 },
                                 style = MaterialTheme.typography.labelSmall,
-                                color = EmeraldSuccess,
+                                color = if (isCloudflareMode) EmeraldSuccess else MaterialTheme.colorScheme.tertiary,
                             )
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -177,9 +192,20 @@ fun SchoolRoleLoginScreen(
                                     tint = MaterialTheme.colorScheme.primary,
                                 )
                             }
-                            if (!isCloudflareMode) {
+                            if (!isCloudflareMode && onConnectCloudflare != null) {
+                                TextButton(
+                                    onClick = { showCloudflareDialog = true },
+                                    modifier = Modifier.testTag("login_connect_cloudflare_btn"),
+                                ) {
+                                    Text("Use Cloudflare", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                }
+                            } else if (!isCloudflareMode) {
                                 TextButton(onClick = onGoogleSignOut) {
                                     Text("Switch Google", style = MaterialTheme.typography.labelSmall)
+                                }
+                            } else if (canDisconnectCustomCloudflare && onDisconnectCustomCloudflare != null) {
+                                TextButton(onClick = { showCloudflareDialog = true }) {
+                                    Text("Server URL", style = MaterialTheme.typography.labelSmall)
                                 }
                             }
                         }
@@ -477,10 +503,94 @@ fun SchoolRoleLoginScreen(
                                 Spacer(Modifier.width(6.dp))
                                 Text("Check Update", color = GoldAmber, style = MaterialTheme.typography.labelMedium)
                             }
+                        } else if (onConnectCloudflare != null) {
+                            OutlinedButton(
+                                onClick = { showCloudflareDialog = true },
+                                border = BorderStroke(1.dp, GoldAmber),
+                                modifier = Modifier.heightIn(min = 48.dp).testTag("footer_connect_cloudflare_btn"),
+                            ) {
+                                Icon(Icons.Filled.CloudQueue, contentDescription = null, tint = GoldAmber, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Connect Cloudflare", color = GoldAmber, style = MaterialTheme.typography.labelMedium)
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    if (showCloudflareDialog && onConnectCloudflare != null) {
+        AlertDialog(
+            onDismissRequest = { if (!cfConnecting) showCloudflareDialog = false },
+            title = { Text("Connect Cloudflare Edge Server") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Paste your deployed Cloudflare Worker URL to sync students, teachers, fees, and updates live with your website.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    OutlinedTextField(
+                        value = cfUrlInput,
+                        onValueChange = {
+                            cfUrlInput = it
+                            cfError = null
+                        },
+                        label = { Text("Cloudflare Worker URL") },
+                        placeholder = { Text("https://doon-public-school-etah....workers.dev") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("dialog_cloudflare_url_input"),
+                    )
+                    if (cfError != null) {
+                        Text(
+                            text = cfError.orEmpty(),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (!cfConnecting) {
+                            scope.launch {
+                                cfConnecting = true
+                                val err = onConnectCloudflare(cfUrlInput)
+                                cfConnecting = false
+                                cfError = err
+                                if (err == null) {
+                                    showCloudflareDialog = false
+                                }
+                            }
+                        }
+                    },
+                    enabled = !cfConnecting,
+                ) {
+                    Text(if (cfConnecting) "Connecting..." else "Verify & Connect")
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (canDisconnectCustomCloudflare && onDisconnectCustomCloudflare != null) {
+                        TextButton(
+                            onClick = {
+                                onDisconnectCustomCloudflare()
+                                showCloudflareDialog = false
+                            },
+                            enabled = !cfConnecting,
+                        ) {
+                            Text("Reset")
+                        }
+                    }
+                    TextButton(
+                        onClick = { showCloudflareDialog = false },
+                        enabled = !cfConnecting,
+                    ) {
+                        Text("Cancel")
+                    }
+                }
+            },
+        )
     }
 }

@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.School
@@ -167,6 +168,7 @@ fun signOutGoogle(
 @Composable
 fun GoogleAuthGateScreen(
     onAuthSuccess: () -> Unit,
+    onConnectCloudflare: (suspend (String) -> String?)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -174,6 +176,10 @@ fun GoogleAuthGateScreen(
     val credentialManager = remember(context) { CredentialManager.create(context) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var showCloudflareSetup by remember { mutableStateOf(false) }
+    var cfUrlInput by remember { mutableStateOf("") }
+    var cfConnecting by remember { mutableStateOf(false) }
+    var cfError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         attemptAutoSignIn(
@@ -372,6 +378,63 @@ fun GoogleAuthGateScreen(
                             Icon(Icons.Filled.School, contentDescription = null, modifier = Modifier.size(20.dp))
                             Spacer(Modifier.width(10.dp))
                             Text("Sign in with Google", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    if (onConnectCloudflare != null) {
+                        HorizontalDivider()
+                        TextButton(
+                            onClick = { showCloudflareSetup = !showCloudflareSetup },
+                            modifier = Modifier.fillMaxWidth().testTag("toggle_cloudflare_gate_setup"),
+                        ) {
+                            Icon(Icons.Filled.CloudDone, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                if (showCloudflareSetup) "Hide Cloudflare Edge Setup" else "Connect Cloudflare Edge Server Instead",
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        if (showCloudflareSetup) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = cfUrlInput,
+                                    onValueChange = {
+                                        cfUrlInput = it
+                                        cfError = null
+                                    },
+                                    label = { Text("Cloudflare Worker URL") },
+                                    placeholder = { Text("https://doon-public-school-etah....workers.dev") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth().testTag("cloudflare_gate_url_input"),
+                                )
+                                if (cfError != null) {
+                                    Text(
+                                        text = cfError.orEmpty(),
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        if (!cfConnecting) {
+                                            scope.launch {
+                                                cfConnecting = true
+                                                cfError = onConnectCloudflare(cfUrlInput)
+                                                cfConnecting = false
+                                            }
+                                        }
+                                    },
+                                    enabled = !cfConnecting,
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("cloudflare_gate_connect_btn"),
+                                ) {
+                                    if (cfConnecting) {
+                                        CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Verifying Server...")
+                                    } else {
+                                        Text("Verify & Connect Cloudflare Edge", fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
                         }
                     }
                 }

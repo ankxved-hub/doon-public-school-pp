@@ -111,20 +111,52 @@ private fun DpsEtahAppRoot(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val useCloudflare = remember { CloudflareApiClient.isEnabled() }
+    val customCfUrl by themePrefs.customCloudflareUrl.collectAsStateWithLifecycle(initialValue = null)
+    if (customCfUrl == null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Brush.verticalGradient(listOf(NavyDeep, NavyRoyal, NavyDeep))),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator(color = GoldAmber)
+        }
+        return
+    }
+
+    CloudflareApiClient.setRuntimeServerUrl(customCfUrl.orEmpty())
+    val activeCfUrl = CloudflareApiClient.activeServerUrl()
+    val useCloudflare = activeCfUrl.isNotBlank()
+
+    val connectCloudflareHandler: suspend (String) -> String? = { rawUrl ->
+        val res = CloudflareApiClient.verifyServerUrl(rawUrl)
+        if (res.isSuccess) {
+            val verifiedUrl = res.getOrThrow()
+            CloudflareApiClient.setRuntimeServerUrl(verifiedUrl)
+            themePrefs.clearRoleSession()
+            themePrefs.setCustomCloudflareUrl(verifiedUrl)
+            null
+        } else {
+            res.exceptionOrNull()?.message ?: "Could not reach Cloudflare Worker. Check the URL and deployment."
+        }
+    }
+
     val credentialManager = remember(context) { CredentialManager.create(context) }
     val currentUser by authStateFlow().collectAsStateWithLifecycle(initialValue = Firebase.auth.currentUser)
 
     val uid = if (useCloudflare) "cloudflare_edge" else currentUser?.uid
     if (uid == null) {
-        GoogleAuthGateScreen(onAuthSuccess = {})
+        GoogleAuthGateScreen(
+            onAuthSuccess = {},
+            onConnectCloudflare = connectCloudflareHandler,
+        )
         return
     }
 
-    key(uid) {
+    key(uid, activeCfUrl) {
         val repository = remember(context, uid) { SchoolRepository(context.applicationContext) }
         val viewModel: SchoolViewModel = viewModel(
-            key = "school_vm_$uid",
+            key = "school_vm_${uid}_$activeCfUrl",
             factory = object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -136,6 +168,16 @@ private fun DpsEtahAppRoot(
         AuthenticatedSchoolShell(
             viewModel = viewModel,
             googleEmail = if (useCloudflare) null else currentUser?.email,
+            cloudflareServerUrl = activeCfUrl,
+            canDisconnectCustomCloudflare = CloudflareApiClient.isUsingRuntimeOverride(),
+            onConnectCloudflare = connectCloudflareHandler,
+            onDisconnectCustomCloudflare = {
+                scope.launch {
+                    CloudflareApiClient.setRuntimeServerUrl("")
+                    themePrefs.clearRoleSession()
+                    themePrefs.setCustomCloudflareUrl("")
+                }
+            },
             isDarkMode = isDarkMode,
             onToggleDarkMode = onToggleDarkMode,
             onGoogleSignOut = {
@@ -155,6 +197,10 @@ private fun DpsEtahAppRoot(
 private fun AuthenticatedSchoolShell(
     viewModel: SchoolViewModel,
     googleEmail: String?,
+    cloudflareServerUrl: String,
+    canDisconnectCustomCloudflare: Boolean,
+    onConnectCloudflare: suspend (String) -> String?,
+    onDisconnectCustomCloudflare: () -> Unit,
     isDarkMode: Boolean,
     onToggleDarkMode: (Boolean) -> Unit,
     onGoogleSignOut: () -> Unit,
@@ -280,6 +326,10 @@ private fun AuthenticatedSchoolShell(
                     onLoginRole = { role, userId, password -> viewModel.loginSchoolRole(role, userId, password) },
                     onGoogleSignOut = onGoogleSignOut,
                     isCloudflareMode = viewModel.isCloudflareMode,
+                    cloudflareServerUrl = cloudflareServerUrl,
+                    canDisconnectCustomCloudflare = canDisconnectCustomCloudflare,
+                    onConnectCloudflare = onConnectCloudflare,
+                    onDisconnectCustomCloudflare = onDisconnectCustomCloudflare,
                     needsCloudflareAdminSetup = needsCloudflareAdminSetup,
                     onClaimCloudflareAdmin = { fn, uidVal, ph, pw -> viewModel.claimCloudflareAdmin(fn, uidVal, ph, pw) },
                     appUpdateState = appUpdateState,

@@ -43,17 +43,48 @@ data class CloudflareDashboardData(
 
 object CloudflareApiClient {
 
-    private fun normalizedBaseUrl(): String {
-        val raw = BuildConfig.CLOUDFLARE_API_URL.trim().trimEnd('/')
-        if (raw.isEmpty()) return ""
-        val isHttps = raw.startsWith("https://", ignoreCase = true)
-        val isLocalHttp = raw.startsWith("http://10.0.2.2", ignoreCase = true) ||
-            raw.startsWith("http://127.0.0.1", ignoreCase = true) ||
-            raw.startsWith("http://localhost", ignoreCase = true)
-        return if (isHttps || isLocalHttp) raw else ""
+    @Volatile
+    private var runtimeOverrideUrl: String = ""
+
+    fun normalizeServerUrl(rawInput: String): String {
+        var cleaned = rawInput.trim().trim('"', '\'').trim()
+        if (cleaned.isEmpty()) return ""
+        if (!cleaned.startsWith("http://", ignoreCase = true) && !cleaned.startsWith("https://", ignoreCase = true)) {
+            cleaned = "https://$cleaned"
+        }
+        cleaned = cleaned.trimEnd('/')
+        if (cleaned.endsWith("/api", ignoreCase = true)) {
+            cleaned = cleaned.dropLast(4).trimEnd('/')
+        }
+        val isHttps = cleaned.startsWith("https://", ignoreCase = true)
+        val isLocalHttp = cleaned.startsWith("http://10.0.2.2", ignoreCase = true) ||
+            cleaned.startsWith("http://127.0.0.1", ignoreCase = true) ||
+            cleaned.startsWith("http://localhost", ignoreCase = true)
+        return if (isHttps || isLocalHttp) cleaned else ""
     }
 
-    fun isEnabled(): Boolean = normalizedBaseUrl().isNotBlank()
+    fun setRuntimeServerUrl(url: String) {
+        runtimeOverrideUrl = normalizeServerUrl(url)
+    }
+
+    fun isUsingRuntimeOverride(): Boolean = runtimeOverrideUrl.isNotBlank()
+
+    fun activeServerUrl(): String =
+        runtimeOverrideUrl.ifBlank { normalizeServerUrl(BuildConfig.CLOUDFLARE_API_URL) }
+
+    fun isEnabled(): Boolean = activeServerUrl().isNotBlank()
+
+    suspend fun verifyServerUrl(candidateUrl: String): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val normalized = normalizeServerUrl(candidateUrl)
+            require(normalized.isNotBlank()) { "Enter a valid HTTPS Cloudflare Worker URL (e.g. https://your-school.workers.dev)." }
+            val parsed = requestJsonWithBase(normalized, "GET", "/api/bootstrap/status")
+            if (!parsed.has("needsSetup")) {
+                throw IllegalStateException("This URL did not respond as a Doon Public School Cloudflare Worker.")
+            }
+            normalized
+        }
+    }
 
     private suspend fun requestJson(
         method: String,
@@ -61,8 +92,18 @@ object CloudflareApiClient {
         body: JSONObject? = null,
         token: String? = null,
     ): JSONObject = withContext(Dispatchers.IO) {
-        val baseUrl = normalizedBaseUrl()
+        val baseUrl = activeServerUrl()
         require(baseUrl.isNotBlank()) { "Cloudflare API URL is not configured." }
+        requestJsonWithBase(baseUrl, method, path, body, token)
+    }
+
+    private fun requestJsonWithBase(
+        baseUrl: String,
+        method: String,
+        path: String,
+        body: JSONObject? = null,
+        token: String? = null,
+    ): JSONObject {
         val conn = (URL("$baseUrl$path").openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 12_000
@@ -76,7 +117,7 @@ object CloudflareApiClient {
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
             }
         }
-        try {
+        return try {
             if (body != null) {
                 conn.outputStream.use { os ->
                     os.write(body.toString().toByteArray(Charsets.UTF_8))

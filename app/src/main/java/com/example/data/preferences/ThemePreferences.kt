@@ -85,6 +85,21 @@ class ThemePreferences(context: Context) {
         }
     }
 
+    val customCloudflareUrl: Flow<String> = appContext.dpsThemeDataStore.data.map { prefs ->
+        prefs[KEY_CUSTOM_CF_URL].orEmpty()
+    }
+
+    suspend fun setCustomCloudflareUrl(url: String) {
+        val cleaned = url.trim()
+        appContext.dpsThemeDataStore.edit { prefs ->
+            if (cleaned.isNotBlank()) {
+                prefs[KEY_CUSTOM_CF_URL] = cleaned
+            } else {
+                prefs.remove(KEY_CUSTOM_CF_URL)
+            }
+        }
+    }
+
     private companion object {
         val KEY_DARK_MODE = booleanPreferencesKey("dark_mode_enabled")
         val KEY_SESSION_OWNER_UID = stringPreferencesKey("saved_session_owner_uid")
@@ -92,5 +107,6 @@ class ThemePreferences(context: Context) {
         val KEY_SESSION_USER_ID = stringPreferencesKey("saved_session_user_id")
         val KEY_SESSION_ROLE = stringPreferencesKey("saved_session_role")
         val KEY_CF_TOKEN = stringPreferencesKey("saved_cloudflare_token")
+        val KEY_CUSTOM_CF_URL = stringPreferencesKey("custom_cloudflare_server_url")
     }
 }
