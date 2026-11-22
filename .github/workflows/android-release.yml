@@ -57,20 +57,29 @@ jobs:
             SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           fi
 
+          # Append (never overwrite) standard & preview license hashes so runner pre-accepted hashes stay intact
           mkdir -p "$SDK_ROOT/licenses"
-          # Pre-accept standard and preview Android SDK licenses for both sdkmanager and AGP auto-download
-          cat <<'EOF' > "$SDK_ROOT/licenses/android-sdk-license"
+          touch "$SDK_ROOT/licenses/android-sdk-license" "$SDK_ROOT/licenses/android-sdk-preview-license"
+          cat <<'EOF' >> "$SDK_ROOT/licenses/android-sdk-license"
           8933bad161af4178b1185d1a37fbf41ea5269c55
           d56f5187479451eabf01fb78af6dfcb131a6481e
           24333f8a63b6825ea9c5514f83c2829b004d1fee
           EOF
-          cat <<'EOF' > "$SDK_ROOT/licenses/android-sdk-preview-license"
+          sort -u -o "$SDK_ROOT/licenses/android-sdk-license" "$SDK_ROOT/licenses/android-sdk-license"
+
+          cat <<'EOF' >> "$SDK_ROOT/licenses/android-sdk-preview-license"
           84831b9409646a918e30573bab4c9c91346d8abd
           EOF
+          sort -u -o "$SDK_ROOT/licenses/android-sdk-preview-license" "$SDK_ROOT/licenses/android-sdk-preview-license"
 
-          set +o pipefail
-          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
-          set -o pipefail
+          accept_licenses() {
+            set +o pipefail
+            yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
+            yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --channel=3 --licenses >/dev/null 2>&1 || true
+            set -o pipefail
+          }
+
+          accept_licenses
 
           # Upgrade cmdline-tools so sdkmanager recognizes minor API levels like android-36.1
           "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "cmdline-tools;latest" || true
@@ -83,20 +92,24 @@ jobs:
           echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
           echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
-          set +o pipefail
-          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
-          set -o pipefail
+          accept_licenses
 
           "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install \
             "platform-tools" \
             "build-tools;36.0.0"
 
-          # Pre-install Android SDK 36.1 (non-blocking: AGP 9.1.1 also auto-downloads platforms;android-36.1 if needed)
-          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platforms;android-36.1" || \
-            echo "::notice::sdkmanager did not pre-install platforms;android-36.1; AGP 9.1.1 will auto-download it during Gradle build."
+          # Pre-install Android SDK 36.1 across stable/beta/canary channels (AGP 9.1.1 also auto-downloads if needed)
+          if [ ! -d "$SDK_ROOT/platforms/android-36.1" ]; then
+            "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platforms;android-36.1" || \
+            "$SDKMANAGER" --sdk_root="$SDK_ROOT" --channel=1 --install "platforms;android-36.1" || \
+            "$SDKMANAGER" --sdk_root="$SDK_ROOT" --channel=3 --install "platforms;android-36.1" || \
+              echo "::notice::platforms;android-36.1 not pre-installed via sdkmanager; AGP 9.1.1 will auto-download it during Gradle."
+          fi
 
-          echo "=== Installed SDK Platforms & Build Tools ==="
-          ls -la "$SDK_ROOT/platforms" "$SDK_ROOT/build-tools" || true
+          accept_licenses
+
+          echo "=== Installed SDK Platforms, Build Tools & Licenses ==="
+          ls -la "$SDK_ROOT/platforms" "$SDK_ROOT/build-tools" "$SDK_ROOT/licenses" || true
 
       - name: Normalize & Verify Cloudflare Worker URL Secret
         shell: bash
@@ -149,6 +162,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Ensure .env.example exists for secrets-gradle-plugin even if dotfiles were omitted on export
+          if [ ! -f ".env.example" ]; then
+            echo "CLOUDFLARE_API_URL=" > .env.example
+          fi
+
           if [ -f "debug.keystore.base64" ]; then
             base64 -d debug.keystore.base64 > debug.keystore
           else
@@ -178,13 +196,46 @@ jobs:
         run: |
           set -euo pipefail
 
+          set +e
           gradle assembleDebug \
             --no-daemon \
             --no-configuration-cache \
-            --stacktrace \
             -Dorg.gradle.daemon=false \
             -Pandroid.builder.sdkDownload=true \
-            -PCLOUDFLARE_API_URL="$CLOUDFLARE_API_URL"
+            -PCLOUDFLARE_API_URL="$CLOUDFLARE_API_URL" \
+            2>&1 | tee /tmp/gradle-build.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            echo ""
+            echo "========================================================"
+            echo "EXACT GRADLE FAILURE SUMMARY (READ THIS)"
+            echo "========================================================"
+            SUMMARY="$(awk '
+              /^> Task .* FAILED/ { print }
+              /^e: / { print }
+              /^FAILURE:/ { show=1 }
+              show { print }
+            ' /tmp/gradle-build.log | head -n 45)"
+            echo "$SUMMARY"
+            echo "========================================================"
+            {
+              echo "### Gradle APK Build Failure Summary"
+              echo '```text'
+              echo "$SUMMARY"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit "$BUILD_EXIT"
+          fi
+
+      - name: Upload Gradle Failure Log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-failure-log
+          path: /tmp/gradle-build.log
+          if-no-files-found: ignore
 
       - name: Align, Sign (v1/v2/v3) & Validate APK Package
         shell: bash
