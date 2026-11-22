@@ -27,6 +27,8 @@ jobs:
           gradle-version: '9.3.1'
 
       - name: Install Android SDK 36.1 & Build Verified APK
+        env:
+          CLOUDFLARE_API_URL: ${{ secrets.CLOUDFLARE_API_URL }}
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36.1" "build-tools;36.0.0"
@@ -66,8 +68,8 @@ jobs:
       - name: Publish GitHub Release with APK
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.${{ github.run_number }}
-          name: "Doon Public School, Etah ERP v1.1.${{ github.run_number }}"
+          tag_name: v1.2.${{ github.run_number }}
+          name: "Doon Public School, Etah ERP v1.2.${{ github.run_number }}"
           body: |
             ### Doon Public School, Etah — Official Android App (APK)
             1. Scroll down to **Assets** and tap **`DoonPublicSchool-Etah.apk`** directly (do not download a `.zip` source archive).

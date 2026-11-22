@@ -271,6 +271,9 @@ private fun AuthenticatedSchoolShell(
                     isCloudflareMode = viewModel.isCloudflareMode,
                     needsCloudflareAdminSetup = needsCloudflareAdminSetup,
                     onClaimCloudflareAdmin = { fn, uidVal, ph, pw -> viewModel.claimCloudflareAdmin(fn, uidVal, ph, pw) },
+                    appUpdateState = appUpdateState,
+                    onCheckForUpdate = { viewModel.checkForAppUpdate(gateway, manual = true) },
+                    onShowMessage = { viewModel.showMessage(it) },
                 )
             }
         } else if (showWelcomeCreditsPage) {

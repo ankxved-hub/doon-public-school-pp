@@ -25,10 +25,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
 import com.example.R
 import com.example.data.model.SchoolCatalog
 import com.example.data.model.SchoolInfo
+import com.example.ui.components.AppUpdateBannerCard
 import com.example.ui.theme.*
+import com.example.ui.viewmodel.AppUpdateState
 import kotlinx.coroutines.launch
 
 @Composable
@@ -44,6 +47,9 @@ fun SchoolRoleLoginScreen(
     isCloudflareMode: Boolean = false,
     needsCloudflareAdminSetup: Boolean = false,
     onClaimCloudflareAdmin: suspend (fullName: String, userId: String, phone: String, password: String) -> String? = { _, _, _, _ -> null },
+    appUpdateState: AppUpdateState = AppUpdateState.Idle,
+    onCheckForUpdate: () -> Unit = {},
+    onShowMessage: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -120,6 +126,17 @@ fun SchoolRoleLoginScreen(
                             Text(SchoolInfo.TRUST, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
                         }
                     }
+                }
+            }
+
+            if (appUpdateState is AppUpdateState.UpdateAvailable) {
+                var loginBannerDismissed by remember(appUpdateState.latestVersionCode) { mutableStateOf(false) }
+                if (!loginBannerDismissed) {
+                    AppUpdateBannerCard(
+                        update = appUpdateState,
+                        onDismiss = { loginBannerDismissed = true },
+                        onShowMessage = onShowMessage,
+                    )
                 }
             }
 
@@ -423,6 +440,43 @@ fun SchoolRoleLoginScreen(
                     }
                     Spacer(Modifier.height(2.dp))
                     Text("${SchoolInfo.ADDRESS} • ${SchoolInfo.PHONES}", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.72f))
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.16f))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Installed App: v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.85f),
+                            )
+                            val statusText = when (appUpdateState) {
+                                is AppUpdateState.Checking -> "Checking for update..."
+                                is AppUpdateState.UpToDate -> "Up to date (Build ${appUpdateState.currentVersionCode})"
+                                is AppUpdateState.UpdateAvailable -> "Update v${appUpdateState.latestVersionName} ready!"
+                                is AppUpdateState.Error -> appUpdateState.message
+                                is AppUpdateState.Idle -> if (isCloudflareMode) "Cloudflare Edge Connected" else "Firebase Mode (Set CLOUDFLARE_API_URL to sync D1)"
+                            }
+                            Text(
+                                text = statusText,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (appUpdateState is AppUpdateState.UpdateAvailable) GoldAmber else Color.White.copy(alpha = 0.65f),
+                            )
+                        }
+                        if (isCloudflareMode) {
+                            OutlinedButton(
+                                onClick = onCheckForUpdate,
+                                border = BorderStroke(1.dp, GoldAmber),
+                                modifier = Modifier.heightIn(min = 48.dp).testTag("login_check_update_btn"),
+                            ) {
+                                Icon(Icons.Filled.SystemUpdate, contentDescription = null, tint = GoldAmber, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Check Update", color = GoldAmber, style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
                 }
             }
         }
