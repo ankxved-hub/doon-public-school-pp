@@ -27,10 +27,14 @@ jobs:
         with:
           packages: ''
 
-      - name: Install Android SDK 36.1 / 36 & Build Tools
+      - name: Install Android SDK 36 / 36.1 & Build Tools
         run: |
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ ! -w "$SDK_ROOT" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "$SDK_ROOT" 2>/dev/null || true
+          fi
           mkdir -p "$SDK_ROOT/licenses"
+
           SDKMANAGER="$(command -v sdkmanager || find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1)"
           if [ -z "$SDKMANAGER" ]; then
             echo "ERROR: sdkmanager not found under $SDK_ROOT"
@@ -44,10 +48,11 @@ jobs:
           fi
 
           yes | "$SDKMANAGER" --licenses --sdk_root="$SDK_ROOT" >/dev/null 2>&1 || true
-          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platform-tools" "build-tools;36.0.0"
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platform-tools" "build-tools;36.0.0" || \
+            "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platform-tools" "build-tools;35.0.0"
 
           if ! "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platforms;android-36.1"; then
-            echo "platforms;android-36.1 unavailable in sdkmanager — installing stable platforms;android-36"
+            echo "platforms;android-36.1 unavailable — installing stable platforms;android-36"
             "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platforms;android-36"
           fi
 
@@ -83,7 +88,7 @@ jobs:
 
           keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey
 
-      - name: Build Android APK with Gradle
+      - name: Build Android APK & App Bundle (Gradle --no-daemon)
         env:
           CLOUDFLARE_API_URL: ${{ secrets.CLOUDFLARE_API_URL }}
         run: |
@@ -93,16 +98,18 @@ jobs:
             echo "WARNING: secrets.CLOUDFLARE_API_URL is EMPTY — APK will allow connecting Cloudflare URL inside the app."
           fi
 
-          gradle assembleDebug \
+          gradle assembleDebug bundleDebug \
             --no-daemon \
             --no-configuration-cache \
             --stacktrace \
+            -Dorg.gradle.daemon=false \
             -PCLOUDFLARE_API_URL="$CLOUDFLARE_API_URL"
 
-      - name: Align, Sign & Validate APK Package
+      - name: Align, Sign (v1/v2/v3) & Validate APK Package
         run: |
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           RAW_APK="app/build/outputs/apk/debug/app-debug.apk"
+          RAW_AAB="app/build/outputs/bundle/debug/app-debug.aab"
           if [ ! -s "$RAW_APK" ]; then
             echo "ERROR: Built APK not found or empty at $RAW_APK"
             exit 1
@@ -116,10 +123,12 @@ jobs:
           APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
           AAPT2="$BUILD_TOOLS_DIR/aapt2"
 
-          rm -rf release
+          rm -rf release /tmp/dps-aligned.apk
           mkdir -p release
 
-          "$ZIPALIGN" -p -f 4 "$RAW_APK" /tmp/dps-aligned.apk
+          if ! "$ZIPALIGN" -P 16 -f 4 "$RAW_APK" /tmp/dps-aligned.apk 2>/dev/null; then
+            "$ZIPALIGN" -p -f 4 "$RAW_APK" /tmp/dps-aligned.apk
+          fi
           "$ZIPALIGN" -c -v 4 /tmp/dps-aligned.apk
 
           "$APKSIGNER" sign \
@@ -139,7 +148,10 @@ jobs:
           if [ -x "$AAPT2" ]; then
             "$AAPT2" dump badging release/DoonPublicSchool-Etah.apk | grep -E "^(package|sdkVersion|targetSdkVersion|application-label):" || true
           fi
-          ls -lh release/DoonPublicSchool-Etah.apk
+          if [ -s "$RAW_AAB" ]; then
+            cp "$RAW_AAB" release/DoonPublicSchool-Etah.aab
+          fi
+          ls -lh release/
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
@@ -147,6 +159,13 @@ jobs:
           name: DoonPublicSchool-Etah-APK
           path: release/DoonPublicSchool-Etah.apk
           if-no-files-found: error
+
+      - name: Upload App Bundle (AAB) Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DoonPublicSchool-Etah-AAB
+          path: release/DoonPublicSchool-Etah.aab
+          if-no-files-found: warn
 
       - name: Publish GitHub Release with APK
         uses: softprops/action-gh-release@v2
@@ -160,7 +179,7 @@ jobs:
             1. Scroll down to **Assets** and tap **`DoonPublicSchool-Etah.apk`** directly (do not download Source code `.zip`).
             2. If you previously installed an APK with a different signing certificate, uninstall the old app once before installing this release.
             3. Allow **Install unknown apps** if prompted by Android / Chrome / Files.
-            4. Verified with 4KB/page zipalign + full **v1 + v2 + v3** APK signatures (`minSdk 24`–`targetSdk 36`).
+            4. Verified with 16KB/4KB zipalign + explicit **v1 + v2 + v3** `apksigner` signatures (`minSdk 24`–`targetSdk 36`).
           files: release/DoonPublicSchool-Etah.apk
           fail_on_unmatched_files: true
           draft: false
