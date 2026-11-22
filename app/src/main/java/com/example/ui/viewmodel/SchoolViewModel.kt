@@ -976,6 +976,17 @@ class SchoolViewModel(
         return false
     }
 
+    fun reportPlayStoreUpdateAvailable(availableVersionCode: Long) {
+        val current = _appUpdateState.value as? AppUpdateState.UpdateAvailable
+        if (current != null && current.latestVersionCode >= availableVersionCode) return
+        _appUpdateState.value = AppUpdateState.UpdateAvailable(
+            latestVersionName = "Latest (Play Store)",
+            latestVersionCode = maxOf(availableVersionCode, BuildConfig.VERSION_CODE.toLong() + 1L),
+            downloadUrl = "https://play.google.com/store/apps/details?id=${BuildConfig.APPLICATION_ID}",
+            releaseNotes = "Official Google Play update ready to install directly inside the app.",
+        )
+    }
+
     fun checkForAppUpdate(gateway: GatewayConfig, manual: Boolean = true) {
         if (isCloudflareMode && gateway.apkDownloadUrl.isBlank() && gateway.githubRepoSlug.isBlank()) {
             if (!manual) return
@@ -1000,13 +1011,7 @@ class SchoolViewModel(
         val installedName = BuildConfig.VERSION_NAME
         val cloudHasNewerCode = gateway.latestVersionCode > installedCode
         val cloudHasNewerName = isRemoteVersionNewer(gateway.latestVersionName, installedName)
-        val cloudDirectUrl = gateway.apkDownloadUrl.trim().ifBlank {
-            val slug = gateway.githubRepoSlug.trim()
-                .removePrefix("https://github.com/")
-                .removePrefix("http://github.com/")
-                .trim('/')
-            if (slug.contains('/')) "https://github.com/$slug/releases/latest/download/DoonPublicSchool-Etah.apk" else ""
-        }
+        val cloudDirectUrl = gateway.apkDownloadUrl.trim()
 
         if ((cloudHasNewerCode || cloudHasNewerName) && cloudDirectUrl.isNotBlank()) {
             _appUpdateState.value = AppUpdateState.UpdateAvailable(
@@ -1022,7 +1027,7 @@ class SchoolViewModel(
         if (repoSlug.isBlank()) {
             if (manual) {
                 _appUpdateState.value = AppUpdateState.UpToDate(installedName, BuildConfig.VERSION_CODE)
-            } else {
+            } else if (_appUpdateState.value !is AppUpdateState.UpdateAvailable) {
                 _appUpdateState.value = AppUpdateState.Idle
             }
             return
@@ -1044,8 +1049,6 @@ class SchoolViewModel(
                         )
                     } else if (manual) {
                         _appUpdateState.value = AppUpdateState.UpToDate(installedName, BuildConfig.VERSION_CODE)
-                    } else {
-                        _appUpdateState.value = AppUpdateState.Idle
                     }
                 }
                 .onFailure { e ->

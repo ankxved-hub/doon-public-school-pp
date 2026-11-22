@@ -880,7 +880,7 @@ class SchoolRepository(private val db: FirebaseFirestore) {
                 GitHubReleaseInfo(
                     tagName = tagName,
                     releaseName = releaseName,
-                    apkDownloadUrl = apkUrl.ifBlank { htmlUrl },
+                    apkDownloadUrl = apkUrl,
                     releasePageUrl = htmlUrl,
                     notes = notes,
                 )

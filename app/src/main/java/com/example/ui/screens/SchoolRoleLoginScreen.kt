@@ -49,6 +49,7 @@ fun SchoolRoleLoginScreen(
     onClaimCloudflareAdmin: suspend (fullName: String, userId: String, phone: String, password: String) -> String? = { _, _, _, _ -> null },
     appUpdateState: AppUpdateState = AppUpdateState.Idle,
     onCheckForUpdate: () -> Unit = {},
+    onInstallUpdate: ((String) -> Unit)? = null,
     onShowMessage: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -136,6 +137,7 @@ fun SchoolRoleLoginScreen(
                         update = appUpdateState,
                         onDismiss = { loginBannerDismissed = true },
                         onShowMessage = onShowMessage,
+                        onInstallClick = onInstallUpdate,
                     )
                 }
             }

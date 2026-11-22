@@ -42,6 +42,7 @@ import com.example.ui.auth.signOutGoogle
 import com.example.ui.components.AppUpdateBannerCard
 import com.example.ui.components.AppUpdatePromptDialog
 import com.example.ui.components.ProfileEditDialog
+import com.example.ui.components.rememberPlayInAppUpdateCoordinator
 import com.example.ui.screens.AdminScreen
 import com.example.ui.screens.AppCreditsScreen
 import com.example.ui.screens.FeeManagerScreen
@@ -205,6 +206,16 @@ private fun AuthenticatedSchoolShell(
     val campusPosters = (campusPostersUi as? DataUiState.Success)?.data ?: emptyList()
     val timetables = (timetablesUi as? DataUiState.Success)?.data ?: emptyList()
 
+    val playUpdateCoordinator = rememberPlayInAppUpdateCoordinator(
+        onStatusMessage = { viewModel.showMessage(it) },
+    )
+    LaunchedEffect(playUpdateCoordinator.playUpdateAvailable, playUpdateCoordinator.playAvailableVersionCode) {
+        val playCode = playUpdateCoordinator.playAvailableVersionCode
+        if (playUpdateCoordinator.playUpdateAvailable && playCode != null) {
+            viewModel.reportPlayStoreUpdateAvailable(playCode)
+        }
+    }
+
     var promptDismissedCode by remember { mutableStateOf<Long?>(null) }
     var dismissedUpdateCode by remember { mutableStateOf<Long?>(null) }
     LaunchedEffect(
@@ -272,7 +283,11 @@ private fun AuthenticatedSchoolShell(
                     needsCloudflareAdminSetup = needsCloudflareAdminSetup,
                     onClaimCloudflareAdmin = { fn, uidVal, ph, pw -> viewModel.claimCloudflareAdmin(fn, uidVal, ph, pw) },
                     appUpdateState = appUpdateState,
-                    onCheckForUpdate = { viewModel.checkForAppUpdate(gateway, manual = true) },
+                    onCheckForUpdate = {
+                        playUpdateCoordinator.refreshPlayUpdateAvailability()
+                        viewModel.checkForAppUpdate(gateway, manual = true)
+                    },
+                    onInstallUpdate = { url -> playUpdateCoordinator.startRealInAppOrFallbackUpdate(url) },
                     onShowMessage = { viewModel.showMessage(it) },
                 )
             }
@@ -497,6 +512,7 @@ private fun AuthenticatedSchoolShell(
                             update = activeUpdate,
                             onDismiss = { dismissedUpdateCode = activeUpdate.latestVersionCode },
                             onShowMessage = { viewModel.showMessage(it) },
+                            onInstallClick = { url -> playUpdateCoordinator.startRealInAppOrFallbackUpdate(url) },
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                         )
                     }
@@ -647,7 +663,11 @@ private fun AuthenticatedSchoolShell(
             },
             gateway = gateway,
             appUpdateState = appUpdateState,
-            onCheckForUpdate = { viewModel.checkForAppUpdate(gateway, manual = true) },
+            onCheckForUpdate = {
+                playUpdateCoordinator.refreshPlayUpdateAvailability()
+                viewModel.checkForAppUpdate(gateway, manual = true)
+            },
+            onInstallClick = { url -> playUpdateCoordinator.startRealInAppOrFallbackUpdate(url) },
             onShowMessage = { viewModel.showMessage(it) },
         )
         }
@@ -659,6 +679,7 @@ private fun AuthenticatedSchoolShell(
                 update = activeUpdate,
                 onDismiss = { promptDismissedCode = activeUpdate.latestVersionCode },
                 onShowMessage = { viewModel.showMessage(it) },
+                onInstallClick = { url -> playUpdateCoordinator.startRealInAppOrFallbackUpdate(url) },
             )
         }
     }

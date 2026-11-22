@@ -626,7 +626,7 @@ private fun AdminDashboardTab(
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                        "When you set a newer Version Code (e.g. 4 for next build) with an APK URL or GitHub owner/repo, every phone immediately asks to install the update on the Login screen and across all portals.",
+                        "When published on Google Play, updates install natively inside the app with zero browser redirect. For direct website APKs, paste your https://doonpublicschooletah.in/...apk or Play Store link below.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -647,33 +647,20 @@ private fun AdminDashboardTab(
                             modifier = Modifier.weight(1.3f).testTag("admin_update_name_input"),
                         )
                     }
-                    OutlinedTextField(
-                        value = updateRepoSlug,
-                        onValueChange = { updateRepoSlug = it.take(160) },
-                        label = { Text("GitHub Repo (owner/repo, optional)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("admin_update_repo_input"),
-                    )
-                    val cleanSlug = updateRepoSlug.trim()
-                        .removePrefix("https://github.com/")
-                        .removePrefix("http://github.com/")
-                        .trim('/')
-                    if (cleanSlug.contains('/')) {
-                        OutlinedButton(
-                            onClick = {
-                                updateApkUrl = "https://github.com/$cleanSlug/releases/latest/download/DoonPublicSchool-Etah.apk"
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Icon(Icons.Filled.AutoFixHigh, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Auto-Fill Latest GitHub APK Link")
-                        }
+                    OutlinedButton(
+                        onClick = {
+                            updateApkUrl = "https://play.google.com/store/apps/details?id=${BuildConfig.APPLICATION_ID}"
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Filled.Shop, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Use Official Google Play Store Link")
                     }
                     OutlinedTextField(
                         value = updateApkUrl,
                         onValueChange = { updateApkUrl = it.take(500) },
-                        label = { Text("APK Download URL") },
+                        label = { Text("Play Store or Direct School APK URL") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("admin_update_url_input"),
                     )
@@ -689,11 +676,9 @@ private fun AdminDashboardTab(
                         onClick = {
                             val parsedCode = updateVersionCodeStr.toLongOrNull()?.coerceAtLeast(1L)
                                 ?: BuildConfig.VERSION_CODE.toLong()
-                            val resolvedUrl = updateApkUrl.trim().ifBlank {
-                                if (cleanSlug.contains('/')) "https://github.com/$cleanSlug/releases/latest/download/DoonPublicSchool-Etah.apk" else ""
-                            }
-                            if (resolvedUrl.isBlank() && !cleanSlug.contains('/')) {
-                                onShowMessage("Enter a GitHub owner/repo or direct APK download URL first.")
+                            val resolvedUrl = updateApkUrl.trim()
+                            if (resolvedUrl.isBlank()) {
+                                onShowMessage("Enter your Google Play Store link or direct school APK URL first.")
                                 return@Button
                             }
                             onSaveGatewayConfig(
@@ -701,7 +686,7 @@ private fun AdminDashboardTab(
                                     latestVersionCode = parsedCode,
                                     latestVersionName = updateVersionName.trim().ifBlank { BuildConfig.VERSION_NAME },
                                     apkDownloadUrl = resolvedUrl,
-                                    githubRepoSlug = cleanSlug,
+                                    githubRepoSlug = "",
                                     updateNotes = updateReleaseNotes.trim(),
                                 )
                             )

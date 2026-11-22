@@ -323,14 +323,6 @@ function resolveAppUpdateUrl(update) {
   if (!update) return "";
   const direct = String(update.apkDownloadUrl || "").trim();
   if (isSafeHttpUrl(direct)) return direct;
-  const slug = String(update.githubRepoSlug || "")
-    .trim()
-    .replace(/^https?:\/\/github\.com\//i, "")
-    .replace(/^\/+|\/+$/g, "");
-  if (slug.includes("/")) {
-    const ghUrl = `https://github.com/${slug}/releases/latest/download/DoonPublicSchool-Etah.apk`;
-    if (isSafeHttpUrl(ghUrl)) return ghUrl;
-  }
   return "";
 }
 
@@ -2469,10 +2461,10 @@ function renderAdminPortal(tabIdx) {
         el("div", { className: "stat-card" }, [el("div", { className: "stat-lbl", textContent: "Circulars Published" }), el("div", { className: "stat-val", textContent: String(circulars.length) })]),
       ]),
       el("section", { className: "card" }, [
-        el("h3", { className: "section-title", textContent: "Publish In-App Android APK Update (Asks Every App to Install)" }),
+        el("h3", { className: "section-title", textContent: "Publish In-App Android Update (Play Store or Direct APK)" }),
         el("p", {
           style: { margin: "0 0 12px", fontSize: "0.86rem", color: "var(--text-muted)" },
-          textContent: "When published with a higher Version Code and APK URL (or GitHub owner/repo), every installed phone pops up an Install Update prompt across the login screen and all portals.",
+          textContent: "Google Play installs trigger native in-app updates directly inside the app with zero browser redirect. Paste your Google Play Store link or direct school website APK URL below.",
         }),
         el("form", {
           className: "form-grid",
@@ -2483,7 +2475,7 @@ function renderAdminPortal(tabIdx) {
               body: JSON.stringify({
                 latestVersionCode: Number(latestVersionCode || 3),
                 latestVersionName,
-                githubRepoSlug,
+                githubRepoSlug: "",
                 apkDownloadUrl,
                 updateNotes,
               }),
@@ -2496,8 +2488,7 @@ function renderAdminPortal(tabIdx) {
         }, [
           el("div", { className: "field" }, [el("label", { textContent: "Latest Version Code" }), el("input", { className: "input", type: "number", value: latestVersionCode, onInput: (e) => { latestVersionCode = e.target.value; } })]),
           el("div", { className: "field" }, [el("label", { textContent: "Latest Version Name" }), el("input", { className: "input", value: latestVersionName, onInput: (e) => { latestVersionName = e.target.value; } })]),
-          el("div", { className: "field" }, [el("label", { textContent: "GitHub Repo Slug (owner/repo)" }), el("input", { className: "input", value: githubRepoSlug, placeholder: "e.g. user/doon-school-app", onInput: (e) => { githubRepoSlug = e.target.value; } })]),
-          el("div", { className: "field" }, [el("label", { textContent: "Direct HTTPS APK Download URL" }), el("input", { className: "input", value: apkDownloadUrl, placeholder: "https://github.com/.../DoonPublicSchool-Etah.apk", onInput: (e) => { apkDownloadUrl = e.target.value; } })]),
+          el("div", { className: "field full" }, [el("label", { textContent: "Google Play Store Link or Direct HTTPS APK URL" }), el("input", { className: "input", value: apkDownloadUrl, placeholder: "https://play.google.com/store/apps/details?id=com.aistudio.doonschool.dpsktq", onInput: (e) => { apkDownloadUrl = e.target.value; } })]),
           el("div", { className: "field full" }, [el("label", { textContent: "Release Notes" }), el("input", { className: "input", value: updateNotes, placeholder: "What's new in this update", onInput: (e) => { updateNotes = e.target.value; } })]),
           el("div", { className: "field full" }, [el("button", { type: "submit", className: "btn btn-primary", textContent: "Publish App Update Live" })]),
         ]),

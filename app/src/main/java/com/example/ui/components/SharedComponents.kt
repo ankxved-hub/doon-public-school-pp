@@ -214,6 +214,7 @@ fun AppUpdateBannerCard(
     update: AppUpdateState.UpdateAvailable,
     onDismiss: () -> Unit,
     onShowMessage: (String) -> Unit = {},
+    onInstallClick: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -270,7 +271,13 @@ fun AppUpdateBannerCard(
                 )
             }
             Button(
-                onClick = { openExternalLink(context, update.downloadUrl, onShowMessage) },
+                onClick = {
+                    if (onInstallClick != null) {
+                        onInstallClick(update.downloadUrl)
+                    } else {
+                        openExternalLink(context, update.downloadUrl, onShowMessage)
+                    }
+                },
                 colors = ButtonDefaults.buttonColors(containerColor = GoldAmber, contentColor = NavyDeep),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
@@ -291,6 +298,7 @@ fun AppUpdatePromptDialog(
     update: AppUpdateState.UpdateAvailable,
     onDismiss: () -> Unit,
     onShowMessage: (String) -> Unit = {},
+    onInstallClick: ((String) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     AlertDialog(
@@ -363,7 +371,13 @@ fun AppUpdatePromptDialog(
         },
         confirmButton = {
             Button(
-                onClick = { openExternalLink(context, update.downloadUrl, onShowMessage) },
+                onClick = {
+                    if (onInstallClick != null) {
+                        onInstallClick(update.downloadUrl)
+                    } else {
+                        openExternalLink(context, update.downloadUrl, onShowMessage)
+                    }
+                },
                 colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
@@ -403,6 +417,7 @@ fun ProfileEditDialog(
     gateway: GatewayConfig = GatewayConfig(),
     appUpdateState: AppUpdateState = AppUpdateState.Idle,
     onCheckForUpdate: () -> Unit = {},
+    onInstallClick: ((String) -> Unit)? = null,
     onShowMessage: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -588,13 +603,19 @@ fun ProfileEditDialog(
                                     )
                                 }
                                 Button(
-                                    onClick = { openExternalLink(context, appUpdateState.downloadUrl, onShowMessage) },
+                                    onClick = {
+                                        if (onInstallClick != null) {
+                                            onInstallClick(appUpdateState.downloadUrl)
+                                        } else {
+                                            openExternalLink(context, appUpdateState.downloadUrl, onShowMessage)
+                                        }
+                                    },
                                     colors = ButtonDefaults.buttonColors(containerColor = EmeraldSuccess, contentColor = Color.White),
                                     modifier = Modifier.fillMaxWidth().height(48.dp).testTag("dialog_install_update_btn"),
                                 ) {
                                     Icon(Icons.Filled.InstallMobile, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(6.dp))
-                                    Text("Download & Install APK")
+                                    Text("Install Update Now")
                                 }
                             }
                             is AppUpdateState.UpToDate -> {
