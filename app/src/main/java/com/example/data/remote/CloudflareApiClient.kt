@@ -47,6 +47,9 @@ data class CloudflareDashboardData(
 
 object CloudflareApiClient {
 
+    const val DEFAULT_CLOUDFLARE_URL: String =
+        "https://doon-public-school-etah.devpratap1216.workers.dev"
+
     @Volatile
     private var runtimeOverrideUrl: String = ""
 
@@ -74,7 +77,9 @@ object CloudflareApiClient {
     fun isUsingRuntimeOverride(): Boolean = runtimeOverrideUrl.isNotBlank()
 
     fun activeServerUrl(): String =
-        runtimeOverrideUrl.ifBlank { normalizeServerUrl(BuildConfig.CLOUDFLARE_API_URL) }
+        runtimeOverrideUrl
+            .ifBlank { normalizeServerUrl(BuildConfig.CLOUDFLARE_API_URL) }
+            .ifBlank { DEFAULT_CLOUDFLARE_URL }
 
     fun isEnabled(): Boolean = activeServerUrl().isNotBlank()
 

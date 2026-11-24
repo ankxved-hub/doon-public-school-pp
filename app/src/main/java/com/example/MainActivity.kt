@@ -141,8 +141,7 @@ private fun DpsEtahAppRoot(
         if (res.isSuccess) {
             val verifiedUrl = res.getOrThrow()
             CloudflareApiClient.setRuntimeServerUrl(verifiedUrl)
-            themePrefs.clearRoleSession()
-            themePrefs.setCustomCloudflareUrl(verifiedUrl)
+            themePrefs.setCustomCloudflareUrlAndResetSession(verifiedUrl)
             null
         } else {
             res.exceptionOrNull()?.message ?: "Could not reach Cloudflare Worker. Check the URL and deployment."
@@ -189,8 +188,7 @@ private fun DpsEtahAppRoot(
             onDisconnectCustomCloudflare = {
                 scope.launch {
                     CloudflareApiClient.setRuntimeServerUrl("")
-                    themePrefs.clearRoleSession()
-                    themePrefs.setCustomCloudflareUrl("")
+                    themePrefs.setCustomCloudflareUrlAndResetSession("")
                 }
             },
             isDarkMode = isDarkMode,

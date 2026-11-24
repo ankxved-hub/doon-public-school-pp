@@ -100,6 +100,22 @@ class ThemePreferences(context: Context) {
         }
     }
 
+    suspend fun setCustomCloudflareUrlAndResetSession(url: String) {
+        val cleaned = url.trim()
+        appContext.dpsThemeDataStore.edit { prefs ->
+            prefs.remove(KEY_SESSION_OWNER_UID)
+            prefs.remove(KEY_SESSION_DOC_ID)
+            prefs.remove(KEY_SESSION_USER_ID)
+            prefs.remove(KEY_SESSION_ROLE)
+            prefs.remove(KEY_CF_TOKEN)
+            if (cleaned.isNotBlank()) {
+                prefs[KEY_CUSTOM_CF_URL] = cleaned
+            } else {
+                prefs.remove(KEY_CUSTOM_CF_URL)
+            }
+        }
+    }
+
     private companion object {
         val KEY_DARK_MODE = booleanPreferencesKey("dark_mode_enabled")
         val KEY_SESSION_OWNER_UID = stringPreferencesKey("saved_session_owner_uid")

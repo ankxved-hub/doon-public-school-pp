@@ -124,8 +124,7 @@ jobs:
 
           raw = (os.environ.get("RAW_CF_URL") or "").strip().strip('"').strip("'").strip()
           if not raw:
-              print("")
-              raise SystemExit(0)
+              raw = "https://doon-public-school-etah.devpratap1216.workers.dev"
           if not raw.lower().startswith(("http://", "https://")):
               raw = "https://" + raw
           parsed = urlparse(raw)
@@ -300,14 +299,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v1.2.${{ github.run_number }}.${{ github.run_attempt }}
-          name: "Doon Public School, Etah ERP v1.2.${{ github.run_number }}"
+          tag_name: v1.3.1.${{ github.run_number }}.${{ github.run_attempt }}
+          name: "Doon Public School, Etah ERP v1.3.1.${{ github.run_number }}"
           body: |
-            ### Doon Public School, Etah — Official Android App (APK)
+            ### Doon Public School, Etah — Official Android App v1.3.1 (APK)
+            **What's New in v1.3.1:**
+            - Built-in automatic Cloudflare Edge connection (no URL entry required on first launch).
+            - New Teacher **Daily Practice Tests** dashboard with deadlines, subjects, filters, and one-tap completion.
+            - Admin **Newspaper** can now broadcast to **All Teachers** or message an **Individual Teacher** directly.
+            - Multi-turn **Doon AI Assistant** and **AI Image Creator & Editor** in Craft & Project Studio.
+
+            **How to Install:**
             1. Scroll down to **Assets** and tap **`DoonPublicSchool-Etah.apk`** directly (do not download Source code `.zip`).
-            2. If you previously installed an APK with a different signing certificate, uninstall the old app once before installing this release.
-            3. Allow **Install unknown apps** if prompted by Android / Chrome / Files.
-            4. Verified with 16KB/4KB zipalign + explicit **v1 + v2 + v3** `apksigner` signatures (`minSdk 24`–`targetSdk 36`).
+            2. Allow **Install unknown apps** if prompted by Android / Chrome / Files.
+            3. Verified with 16KB/4KB zipalign + explicit **v1 + v2 + v3** `apksigner` signatures (`minSdk 24`–`targetSdk 36`).
           files: release/DoonPublicSchool-Etah.apk
           fail_on_unmatched_files: true
           draft: false
