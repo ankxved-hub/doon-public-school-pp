@@ -101,11 +101,20 @@ fun TeacherNoticesTab(
         },
     )
 
-    val visibleNotices = remember(circulars, teacher.id, teacher.fullName) {
+    var inboxFilter by remember { mutableStateOf("All") }
+
+    val visibleNotices = remember(circulars, teacher.id, teacher.fullName, inboxFilter) {
         circulars.filter { c ->
-            c.recipientDocId.isBlank() ||
+            val canSee = c.recipientDocId.isBlank() ||
                 c.recipientDocId == teacher.id ||
                 c.postedBy == teacher.fullName
+            if (!canSee) return@filter false
+            when (inboxFilter) {
+                "Direct to Me" -> c.recipientDocId == teacher.id
+                "All Teachers" -> c.audience.equals("All Teachers", ignoreCase = true)
+                "From Admin" -> c.senderRole.equals("ADMIN", ignoreCase = true)
+                else -> true
+            }
         }
     }
 
@@ -426,19 +435,44 @@ fun TeacherNoticesTab(
         }
 
         item {
-            Text(
-                "NOTICES & CIRCULARS (${visibleNotices.size})",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "NOTICES, NEWSPAPER & ADMIN MESSAGES (${visibleNotices.size})",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                ) {
+                    listOf("All", "From Admin", "Direct to Me", "All Teachers").forEach { f ->
+                        FilterChip(
+                            selected = inboxFilter == f,
+                            onClick = { inboxFilter = f },
+                            label = { Text(f) },
+                            modifier = Modifier.testTag("teacher_notice_filter_${f.lowercase().replace(' ', '_')}"),
+                        )
+                    }
+                }
+            }
         }
 
         items(visibleNotices, key = { it.id }) { c ->
+            val isDirectToMe = c.recipientDocId == teacher.id
             val isDirect = c.recipientDocId.isNotBlank()
+            val isAllTeachers = c.audience.equals("All Teachers", ignoreCase = true)
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, if (isDirect) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline),
+                border = BorderStroke(
+                    1.dp,
+                    when {
+                        isDirectToMe -> IndigoAccent
+                        isAllTeachers -> EmeraldSuccess.copy(alpha = 0.65f)
+                        isDirect -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                        else -> MaterialTheme.colorScheme.outline
+                    },
+                ),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -447,11 +481,35 @@ fun TeacherNoticesTab(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                        ) {
                             Surface(color = GoldSoft, shape = RoundedCornerShape(6.dp)) {
                                 Text(c.category, style = MaterialTheme.typography.labelSmall, color = NavyDeep, modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
                             }
-                            if (isDirect) {
+                            if (isDirectToMe) {
+                                Surface(color = IndigoAccent.copy(alpha = 0.16f), shape = RoundedCornerShape(6.dp)) {
+                                    Text(
+                                        "DIRECT TO YOU",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = IndigoAccent,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                    )
+                                }
+                            } else if (isAllTeachers) {
+                                Surface(color = EmeraldContainer, shape = RoundedCornerShape(6.dp)) {
+                                    Text(
+                                        "ALL TEACHERS",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = EmeraldSuccess,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                    )
+                                }
+                            } else if (isDirect) {
                                 Surface(color = EmeraldContainer, shape = RoundedCornerShape(6.dp)) {
                                     Text(
                                         "To: ${c.recipientName.ifBlank { "Specific Person" }}",

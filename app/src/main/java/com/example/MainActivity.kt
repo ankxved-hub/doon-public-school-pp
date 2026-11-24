@@ -45,6 +45,7 @@ import com.example.ui.components.AppUpdatePromptDialog
 import com.example.ui.components.ProfileEditDialog
 import com.example.ui.components.rememberPlayInAppUpdateCoordinator
 import com.example.ui.screens.AdminScreen
+import com.example.ui.screens.AiChatbotScreen
 import com.example.ui.screens.AppCreditsScreen
 import com.example.ui.screens.FeeManagerScreen
 import com.example.ui.screens.SchoolRoleLoginScreen
@@ -246,6 +247,7 @@ private fun AuthenticatedSchoolShell(
     val aiMessages by viewModel.aiMessages.collectAsStateWithLifecycle()
     val aiTutorState by viewModel.aiTutorState.collectAsStateWithLifecycle()
     val aiPersona by viewModel.aiPersona.collectAsStateWithLifecycle()
+    val selectedAiModel by viewModel.selectedAiModel.collectAsStateWithLifecycle()
     val craftAiImageState by viewModel.craftAiImageState.collectAsStateWithLifecycle()
     val generatingCraftPostId by viewModel.generatingCraftPostId.collectAsStateWithLifecycle()
     val appUpdateState by viewModel.appUpdateState.collectAsStateWithLifecycle()
@@ -369,12 +371,12 @@ private fun AuthenticatedSchoolShell(
             "ADMIN" -> listOf(
                 NavTab("Dashboard", Icons.Filled.Dashboard),
                 NavTab("Accounts", Icons.Filled.ManageAccounts),
-                NavTab("Circulars", Icons.Filled.Campaign),
+                NavTab("Newspaper", Icons.Filled.Newspaper),
                 NavTab("Payments", Icons.Filled.ReceiptLong),
                 NavTab("Projects", Icons.Filled.Brush),
             )
             "TEACHER" -> listOf(
-                NavTab("Daily DPT", Icons.Filled.Quiz),
+                NavTab("Daily Tests", Icons.Filled.Quiz),
                 NavTab("Weekly DPT", Icons.Filled.Leaderboard),
                 NavTab("Attendance", Icons.Filled.FactCheck),
                 NavTab("Notices", Icons.Filled.Campaign),
@@ -398,7 +400,22 @@ private fun AuthenticatedSchoolShell(
 
     var selectedTab by remember(user.id, user.role) { mutableIntStateOf(0) }
     var showProfileEditDialog by remember { mutableStateOf(false) }
+    var showAiChatbot by remember { mutableStateOf(false) }
 
+    if (showAiChatbot) {
+        AiChatbotScreen(
+            currentUser = user,
+            messages = aiMessages,
+            tutorState = aiTutorState,
+            selectedPersona = aiPersona,
+            selectedModel = selectedAiModel,
+            onSelectPersona = { viewModel.selectAiPersona(it) },
+            onSelectModel = { viewModel.selectAiModel(it) },
+            onSendMessage = { viewModel.askAiTutor(user, it) },
+            onClearChat = { viewModel.clearAiChatHistory() },
+            onBack = { showAiChatbot = false },
+        )
+    } else {
     BackHandler(enabled = selectedTab != 0) {
         selectedTab = 0
     }
@@ -477,6 +494,12 @@ private fun AuthenticatedSchoolShell(
                                     }
                                 }
                             }
+                        }
+                        IconButton(
+                            onClick = { showAiChatbot = true },
+                            modifier = Modifier.testTag("topbar_ai_assistant_btn"),
+                        ) {
+                            Icon(Icons.Filled.AutoAwesome, contentDescription = "Open Doon AI Assistant")
                         }
                         if (viewModel.isCloudflareMode) {
                             IconButton(
@@ -608,6 +631,8 @@ private fun AuthenticatedSchoolShell(
                             onPostCircular = { viewModel.postCircular(it) },
                             onPublishCampusPoster = { viewModel.publishCampusPoster(it) },
                             onGenerateCraftAiImage = { t, cat, desc, mat -> viewModel.generateCraftAiImage(t, cat, desc, mat) },
+                            onGenerateCustomAiImage = { prompt -> viewModel.generateCustomAiImage(prompt) },
+                            onEditCraftAiImage = { src, edit -> viewModel.editCraftAiImage(src, edit) },
                             onClearCraftPreview = { viewModel.clearCraftAiImageState() },
                             onPublishCraftProject = { viewModel.publishCraftProject(it) },
                             onGenerateCraftImageForPost = { viewModel.generateAiImageForExistingCraft(it) },
@@ -649,6 +674,8 @@ private fun AuthenticatedSchoolShell(
                             onDeleteStudent = { viewModel.deleteUser(it) },
                             onSaveTimetable = { cls, sec, slots, by -> viewModel.saveTimetable(cls, sec, slots, by) },
                             onGenerateCraftAiImage = { t, cat, desc, mat -> viewModel.generateCraftAiImage(t, cat, desc, mat) },
+                            onGenerateCustomAiImage = { prompt -> viewModel.generateCustomAiImage(prompt) },
+                            onEditCraftAiImage = { src, edit -> viewModel.editCraftAiImage(src, edit) },
                             onClearCraftPreview = { viewModel.clearCraftAiImageState() },
                             onPublishCraftProject = { viewModel.publishCraftProject(it) },
                             onGenerateCraftImageForPost = { viewModel.generateAiImageForExistingCraft(it) },
@@ -702,6 +729,8 @@ private fun AuthenticatedSchoolShell(
                             onSelectAiPersona = { p -> viewModel.selectAiPersona(p) },
                             onClearAiChat = { viewModel.clearAiChatHistory() },
                             onGenerateCraftAiImage = { t, cat, desc, mat -> viewModel.generateCraftAiImage(t, cat, desc, mat) },
+                            onGenerateCustomAiImage = { prompt -> viewModel.generateCustomAiImage(prompt) },
+                            onEditCraftAiImage = { src, edit -> viewModel.editCraftAiImage(src, edit) },
                             onClearCraftPreview = { viewModel.clearCraftAiImageState() },
                             onPublishCraftProject = { viewModel.publishCraftProject(it) },
                             onGenerateCraftImageForPost = { viewModel.generateAiImageForExistingCraft(it) },
@@ -736,8 +765,9 @@ private fun AuthenticatedSchoolShell(
             onInstallClick = { url -> playUpdateCoordinator.startRealInAppOrFallbackUpdate(url) },
             onShowMessage = { viewModel.showMessage(it) },
         )
-        }
-        }
+    }
+    }
+    }
 
         val activeUpdate = appUpdateState as? AppUpdateState.UpdateAvailable
         if (activeUpdate != null && promptDismissedCode != activeUpdate.latestVersionCode) {

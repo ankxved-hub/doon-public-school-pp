@@ -1,17 +1,11 @@
 package com.example.ui.components
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.print.PrintAttributes
 import android.print.PrintManager
-import android.text.TextUtils
-import android.util.Base64
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -25,13 +19,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.example.R
-import com.example.data.model.SchoolInfo
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
-import kotlin.math.max
 
 /**
  * Pure-Kotlin ISO/IEC 18004 Byte-mode QR Matrix Generator (Versions 1..8, ECC-L)
@@ -335,161 +323,4 @@ fun printHtmlDocument(context: Context, jobName: String, htmlBody: String) {
         }
     }
     webView.loadDataWithBaseURL(null, htmlBody, "text/HTML", "UTF-8", null)
-}
-
-private fun encodeDrawableToDataUri(
-    context: Context,
-    @DrawableRes resId: Int,
-    maxDimPx: Int = 720,
-    usePng: Boolean = false,
-): String {
-    val decoded = BitmapFactory.decodeResource(context.resources, resId) ?: return ""
-    val largest = max(decoded.width, decoded.height)
-    val scaled = if (largest > maxDimPx && largest > 0) {
-        val ratio = maxDimPx.toFloat() / largest.toFloat()
-        Bitmap.createScaledBitmap(
-            decoded,
-            (decoded.width * ratio).toInt().coerceAtLeast(1),
-            (decoded.height * ratio).toInt().coerceAtLeast(1),
-            true,
-        )
-    } else {
-        decoded
-    }
-    val out = ByteArrayOutputStream()
-    val mime = if (usePng) {
-        scaled.compress(Bitmap.CompressFormat.PNG, 95, out)
-        "image/png"
-    } else {
-        scaled.compress(Bitmap.CompressFormat.JPEG, 82, out)
-        "image/jpeg"
-    }
-    if (scaled !== decoded) scaled.recycle()
-    decoded.recycle()
-    val encoded = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-    return "data:$mime;base64,$encoded"
-}
-
-suspend fun printTeacherLoginGuidePdf(
-    context: Context,
-    schoolWebsite: String = "https://doonpublicschooletah.in",
-) {
-    val htmlBody = withContext(Dispatchers.Default) {
-        val logoUri = encodeDrawableToDataUri(context, R.drawable.dps_real_logo, maxDimPx = 240, usePng = true)
-        val campusUri = encodeDrawableToDataUri(context, R.drawable.dps_etah_real_building_alt, maxDimPx = 840)
-        val step1Uri = encodeDrawableToDataUri(context, R.drawable.teacher_guide_step1_1795342841943, maxDimPx = 680)
-        val step2Uri = encodeDrawableToDataUri(context, R.drawable.teacher_guide_step2_1795342863239, maxDimPx = 680)
-        val step3Uri = encodeDrawableToDataUri(context, R.drawable.teacher_guide_step3_1795342843136, maxDimPx = 760)
-        val safeUrl = TextUtils.htmlEncode(schoolWebsite)
-        val safeName = TextUtils.htmlEncode(SchoolInfo.NAME)
-        val safeAddress = TextUtils.htmlEncode(SchoolInfo.ADDRESS)
-        val safePhones = TextUtils.htmlEncode(SchoolInfo.PHONES)
-        val safeEmail = TextUtils.htmlEncode(SchoolInfo.EMAIL)
-
-        """
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-          <meta charset="UTF-8" />
-          <style>
-            @page { size: A4; margin: 12mm; }
-            body { font-family: Arial, Helvetica, sans-serif; color: #0f172a; margin: 0; padding: 0; line-height: 1.42; }
-            .header { background: #0c1f3d; color: #ffffff; border-radius: 14px; overflow: hidden; margin-bottom: 14px; border: 2px solid #f59e0b; }
-            .campus-img { width: 100%; height: 130px; object-fit: cover; display: block; }
-            .brand-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; }
-            .logo-box { width: 56px; height: 56px; background: #ffffff; border-radius: 10px; padding: 4px; flex-shrink: 0; }
-            .logo-box img { width: 100%; height: 100%; object-fit: contain; }
-            .title { font-size: 19px; font-weight: bold; margin: 0; color: #ffffff; }
-            .subtitle { font-size: 12px; color: #fcd34d; margin: 3px 0 0 0; font-weight: bold; }
-            .meta { font-size: 11px; color: #dbeafe; margin: 2px 0 0 0; }
-            .card { border: 1px solid #cbd5e1; border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; page-break-inside: avoid; background: #ffffff; }
-            .step-badge { display: inline-block; background: #0c1f3d; color: #fcd34d; font-size: 11px; font-weight: bold; padding: 3px 9px; border-radius: 999px; margin-bottom: 6px; }
-            .step-grid { display: flex; gap: 14px; align-items: flex-start; }
-            .step-text { flex: 1.25; font-size: 12px; }
-            .step-img { flex: 1; text-align: center; }
-            .step-img img { width: 100%; max-width: 245px; border-radius: 10px; border: 1px solid #94a3b8; }
-            ul { margin: 6px 0; padding-left: 18px; }
-            li { margin-bottom: 5px; }
-            .tip { background: #fef3c7; border-left: 4px solid #d97706; padding: 8px 10px; border-radius: 6px; font-size: 11.5px; margin-top: 8px; }
-            .footer { background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 14px; font-size: 11px; color: #334155; }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <img class="campus-img" src="$campusUri" alt="Doon Public School Etah Campus" />
-            <div class="brand-row">
-              <div class="logo-box"><img src="$logoUri" alt="School Crest" /></div>
-              <div>
-                <h1 class="title">$safeName — Teacher Login Guide</h1>
-                <p class="subtitle">Step-by-Step Illustrated Guide for Android App &amp; Web Portal</p>
-                <p class="meta">Portal: $safeUrl &bull; Official Teacher ERP Guide</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="card">
-            <span class="step-badge">PART 1 &bull; ANDROID APP TEACHER LOGIN</span>
-            <div class="step-grid">
-              <div class="step-text">
-                <strong>How to Sign In on Your Android Phone:</strong>
-                <ul>
-                  <li><strong>Step 1 — Open App:</strong> Launch the <em>Doon Public School, Etah</em> Android app. Check the bottom footer for <em>Cloudflare Edge Connected</em>.</li>
-                  <li><strong>Step 2 — Tap Teacher Role:</strong> Under <em>STEP 1: SELECT YOUR ROLE</em>, tap <strong>Teacher</strong> (chip highlights in Navy &amp; Gold).</li>
-                  <li><strong>Step 3 — Enter Employee ID:</strong> Type your Teacher Employee ID given by the Admin Office (example: <strong>TCH101</strong>).</li>
-                  <li><strong>Step 4 — Enter Password &amp; Sign In:</strong> Type your password (use the eye icon to verify spelling) and tap <strong>Sign In to Doon Public School Portal</strong>.</li>
-                </ul>
-                <div class="tip"><strong>Before you start:</strong> Ask Principal / Admin for your Employee ID &amp; initial password created under <em>Admin &rarr; Accounts</em>.</div>
-              </div>
-              <div class="step-img">
-                <img src="$step1Uri" alt="Android Teacher Login Screen" />
-              </div>
-            </div>
-          </div>
-
-          <div class="card">
-            <span class="step-badge">PART 2 &bull; INSIDE THE TEACHER PORTAL &amp; MULTI-ROLE SWITCHING</span>
-            <div class="step-grid">
-              <div class="step-text">
-                <strong>Daily Tasks &amp; Role Switching:</strong>
-                <ul>
-                  <li><strong>Daily &amp; Weekly DPT:</strong> Mark topic taught, homework details, class attendance, marks, and parent notices right from the bottom tabs.</li>
-                  <li><strong>Multi-Role Accounts:</strong> If Admin granted you extra access (such as <em>Fee Manager</em> or <em>Principal / Admin</em>), tap the <strong>Swap icon (&hArr;)</strong> in the top-right bar to switch portals without logging out.</li>
-                  <li><strong>Profile &amp; Password:</strong> Tap your profile icon anytime to view your assigned wing, classes, and subjects.</li>
-                </ul>
-              </div>
-              <div class="step-img">
-                <img src="$step2Uri" alt="Teacher Portal & Role Swap Guide" />
-              </div>
-            </div>
-          </div>
-
-          <div class="card">
-            <span class="step-badge">PART 3 &bull; WEBSITE LOGIN ($safeUrl)</span>
-            <div class="step-grid">
-              <div class="step-text">
-                <strong>Using the School Website on Mobile Browser or Laptop:</strong>
-                <ul>
-                  <li><strong>Open Portal:</strong> Visit <strong>$safeUrl</strong> (or your Cloudflare Workers portal link) in Chrome / Edge.</li>
-                  <li><strong>Select Teacher Role:</strong> Click the <strong>Teacher</strong> tab in the Role Login box.</li>
-                  <li><strong>Enter Credentials:</strong> Enter the exact same <strong>Employee ID</strong> (e.g., <em>TCH101</em>) and <strong>Password</strong> used in the Android app.</li>
-                  <li><strong>Live Cloud Sync:</strong> Attendance, Daily/Weekly DPT, and Marks saved on the website appear instantly in the Android app and vice-versa.</li>
-                </ul>
-              </div>
-              <div class="step-img">
-                <img src="$step3Uri" alt="Web Portal Teacher Login Guide" />
-              </div>
-            </div>
-          </div>
-
-          <div class="footer">
-            <strong>Need Login Help or Password Reset?</strong> Contact the School Admin Office ($safePhones &bull; $safeEmail).<br/>
-            Campus: $safeAddress &bull; Do not share your Staff Employee ID or password with students or outside parties.
-          </div>
-        </body>
-        </html>
-        """.trimIndent()
-    }
-    withContext(Dispatchers.Main) {
-        printHtmlDocument(context, "DPS_Etah_Teacher_Login_Guide", htmlBody)
-    }
 }

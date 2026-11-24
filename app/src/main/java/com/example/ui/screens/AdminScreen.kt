@@ -40,11 +40,9 @@ import com.example.ui.components.StatMetricCard
 import com.example.ui.components.StudentDptResultCard
 import com.example.ui.components.decodeAttachmentBitmap
 import com.example.ui.components.formatInr
-import com.example.ui.components.printTeacherLoginGuidePdf
 import com.example.ui.components.readAttachmentFromUri
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.CraftAiImageState
-import kotlinx.coroutines.launch
 
 @Composable
 fun AdminScreen(
@@ -71,6 +69,8 @@ fun AdminScreen(
     onPostCircular: (Circular) -> Unit,
     onPublishCampusPoster: (CampusPoster) -> Unit = {},
     onGenerateCraftAiImage: (String, String, String, String) -> Unit = { _, _, _, _ -> },
+    onGenerateCustomAiImage: (String) -> Unit = {},
+    onEditCraftAiImage: (String, String) -> Unit = { _, _ -> },
     onClearCraftPreview: () -> Unit = {},
     onPublishCraftProject: (CraftProject) -> Unit = {},
     onGenerateCraftImageForPost: (CraftProject) -> Unit = {},
@@ -134,6 +134,7 @@ fun AdminScreen(
         )
         2 -> AdminCircularsTab(
             adminUser = adminUser,
+            teachers = teachers,
             circulars = circulars,
             onPostCircular = onPostCircular,
             onDeleteCircular = { c -> onDeleteRecord("circulars", c.id, c.title) },
@@ -155,6 +156,8 @@ fun AdminScreen(
             craftAiImageState = craftAiImageState,
             generatingPostId = generatingCraftPostId,
             onGeneratePreviewImage = onGenerateCraftAiImage,
+            onGenerateCustomAiImage = onGenerateCustomAiImage,
+            onEditAiImage = onEditCraftAiImage,
             onClearPreviewImage = onClearCraftPreview,
             onPublishProject = onPublishCraftProject,
             onGenerateImageForPost = onGenerateCraftImageForPost,
@@ -989,79 +992,11 @@ private fun AdminAccountsTab(
         }.sortedBy { it.role }
     }
 
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var isExportingGuide by remember { mutableStateOf(false) }
-
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item {
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = GoldSoft),
-                border = BorderStroke(1.dp, GoldAmber),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.PictureAsPdf,
-                        contentDescription = "Teacher Login PDF Guide",
-                        tint = NavyDeep,
-                        modifier = Modifier.size(28.dp),
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Teacher Login Guide (PDF)",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = NavyDeep,
-                        )
-                        Text(
-                            text = "Shareable step-by-step PDF with real campus photos & login screenshots",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = NavyDeep.copy(alpha = 0.82f),
-                        )
-                    }
-                    Button(
-                        onClick = {
-                            if (!isExportingGuide) {
-                                scope.launch {
-                                    isExportingGuide = true
-                                    try {
-                                        printTeacherLoginGuidePdf(context)
-                                    } finally {
-                                        isExportingGuide = false
-                                    }
-                                }
-                            }
-                        },
-                        enabled = !isExportingGuide,
-                        colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.heightIn(min = 48.dp).testTag("admin_teacher_login_guide_pdf_btn"),
-                    ) {
-                        if (isExportingGuide) {
-                            CircularProgressIndicator(
-                                color = GoldAmber,
-                                strokeWidth = 2.dp,
-                                modifier = Modifier.size(16.dp),
-                            )
-                        } else {
-                            Icon(Icons.Filled.Print, contentDescription = null, modifier = Modifier.size(18.dp))
-                        }
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (isExportingGuide) "Preparing..." else "Save PDF")
-                    }
-                }
-            }
-        }
         item {
             Card(
                 shape = RoundedCornerShape(20.dp),
@@ -1454,9 +1389,16 @@ private fun AdminAccountsTab(
     }
 }
 
+private enum class AdminNewspaperTarget(val label: String) {
+    SCHOOL_OR_CLASS("School / Class"),
+    ALL_TEACHERS("All Teachers"),
+    SINGLE_TEACHER("Individual Teacher"),
+}
+
 @Composable
 private fun AdminCircularsTab(
     adminUser: SchoolUser,
+    teachers: List<SchoolUser>,
     circulars: List<Circular>,
     onPostCircular: (Circular) -> Unit,
     onDeleteCircular: (Circular) -> Unit,
@@ -1465,10 +1407,26 @@ private fun AdminCircularsTab(
 ) {
     val context = LocalContext.current
     var title by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf("Notice") }
+    var category by remember { mutableStateOf("Newspaper") }
+    var targetMode by remember { mutableStateOf(AdminNewspaperTarget.SCHOOL_OR_CLASS) }
     var selectedTargetScope by remember { mutableStateOf("All Classes") }
     var selectedTargetSection by remember { mutableStateOf("ALL") }
     var classDropdownExpanded by remember { mutableStateOf(false) }
+
+    val sortedTeachers = remember(teachers) { teachers.sortedBy { it.fullName } }
+    var teacherSearch by remember { mutableStateOf("") }
+    var teacherMenuOpen by remember { mutableStateOf(false) }
+    var selectedTeacher by remember(sortedTeachers) { mutableStateOf(sortedTeachers.firstOrNull()) }
+    val filteredTeachers = remember(sortedTeachers, teacherSearch) {
+        val q = teacherSearch.trim()
+        if (q.isBlank()) sortedTeachers
+        else sortedTeachers.filter {
+            it.fullName.contains(q, ignoreCase = true) ||
+                it.userId.contains(q, ignoreCase = true) ||
+                it.subject.contains(q, ignoreCase = true)
+        }
+    }
+
     var date by remember { mutableStateOf(SchoolCatalog.todayIso()) }
     var content by remember { mutableStateOf("") }
     var pendingAttachment by remember { mutableStateOf<PickedAttachment?>(null) }
@@ -1508,11 +1466,47 @@ private fun AdminCircularsTab(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Principal Circular & Holiday Notice", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        "School Newspaper, Circulars & Teacher Messages",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "Send announcements to the entire school, a class/wing, all teachers, or directly to an individual teacher.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    // Audience Mode Selector: School/Class, All Teachers, Individual Teacher
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    ) {
+                        AdminNewspaperTarget.entries.forEach { mode ->
+                            FilterChip(
+                                selected = targetMode == mode,
+                                onClick = { targetMode = mode },
+                                leadingIcon = {
+                                    Icon(
+                                        when (mode) {
+                                            AdminNewspaperTarget.SCHOOL_OR_CLASS -> Icons.Filled.School
+                                            AdminNewspaperTarget.ALL_TEACHERS -> Icons.Filled.Groups
+                                            AdminNewspaperTarget.SINGLE_TEACHER -> Icons.Filled.Person
+                                        },
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                                label = { Text(mode.label) },
+                                modifier = Modifier.testTag("admin_target_${mode.name.lowercase()}"),
+                            )
+                        }
+                    }
+
                     OutlinedTextField(
                         value = title,
                         onValueChange = { title = it },
-                        label = { Text("Circular / Holiday Title") },
+                        label = { Text("Headline / Circular Title") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("circular_title_input"),
                     )
@@ -1520,94 +1514,181 @@ private fun AdminCircularsTab(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.horizontalScroll(rememberScrollState()),
                     ) {
-                        listOf("Notice", "Holiday", "Exam Datesheet", "Event").forEach { cat ->
+                        listOf("Newspaper", "Staff Notice", "Notice", "Holiday", "Exam Datesheet", "Event").forEach { cat ->
                             FilterChip(selected = category == cat, onClick = { category = cat }, label = { Text(cat) })
                         }
                     }
 
-                    // Target Class / Wing Dropdown (Select, don't type)
-                    Box(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(
-                            onClick = { classDropdownExpanded = true },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 52.dp)
-                                .testTag("admin_circular_class_dropdown"),
-                        ) {
-                            Icon(Icons.Filled.Class, contentDescription = "Select Class", modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Target Class / Wing", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(
-                                    text = if (selectedTargetScope in SchoolCatalog.allClasses) {
-                                        val secLabel = if (selectedTargetSection == "ALL") "All Sections" else "Section $selectedTargetSection"
-                                        "$selectedTargetScope ($secLabel)"
+                    when (targetMode) {
+                        AdminNewspaperTarget.ALL_TEACHERS -> {
+                            Surface(
+                                color = EmeraldContainer,
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, EmeraldSuccess.copy(alpha = 0.4f)),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Icon(Icons.Filled.Groups, contentDescription = null, tint = EmeraldSuccess)
+                                    Text(
+                                        "Broadcast to ALL Teachers (${sortedTeachers.size} faculty members). Hidden from students.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = EmeraldSuccess,
+                                    )
+                                }
+                            }
+                        }
+                        AdminNewspaperTarget.SINGLE_TEACHER -> {
+                            OutlinedTextField(
+                                value = teacherSearch,
+                                onValueChange = { teacherSearch = it },
+                                label = { Text("Search Teacher (Name, Employee ID, Subject)") },
+                                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth().testTag("admin_teacher_search_input"),
+                            )
+                            Box(modifier = Modifier.fillMaxWidth()) {
+                                OutlinedButton(
+                                    onClick = { teacherMenuOpen = true },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 52.dp)
+                                        .testTag("admin_teacher_picker_dropdown"),
+                                ) {
+                                    Icon(Icons.Filled.PersonPin, contentDescription = "Select Teacher", modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("Recipient Teacher", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(
+                                            text = selectedTeacher?.let { t ->
+                                                val meta = listOfNotNull(
+                                                    t.userId.takeIf { it.isNotBlank() },
+                                                    t.subject.takeIf { it.isNotBlank() },
+                                                ).joinToString(" • ")
+                                                "${t.fullName}${if (meta.isNotBlank()) " ($meta)" else ""}"
+                                            } ?: "No teachers available",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                    Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
+                                }
+                                DropdownMenu(
+                                    expanded = teacherMenuOpen,
+                                    onDismissRequest = { teacherMenuOpen = false },
+                                ) {
+                                    if (filteredTeachers.isEmpty()) {
+                                        DropdownMenuItem(
+                                            text = { Text("No matching teacher found") },
+                                            onClick = { teacherMenuOpen = false },
+                                        )
                                     } else {
-                                        selectedTargetScope
-                                    },
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                )
-                            }
-                            Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
-                        }
-                        DropdownMenu(
-                            expanded = classDropdownExpanded,
-                            onDismissRequest = { classDropdownExpanded = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("All Classes (Entire School)") },
-                                onClick = {
-                                    selectedTargetScope = "All Classes"
-                                    classDropdownExpanded = false
-                                },
-                            )
-                            SchoolCatalog.wings.forEach { wing ->
-                                DropdownMenuItem(
-                                    text = { Text("Wing: ${wing.name} (${wing.classesLabel})") },
-                                    onClick = {
-                                        selectedTargetScope = "Wing: ${wing.name}"
-                                        classDropdownExpanded = false
-                                    },
-                                )
-                            }
-                            HorizontalDivider()
-                            SchoolCatalog.allClasses.forEach { cls ->
-                                DropdownMenuItem(
-                                    text = { Text("$cls (${SchoolCatalog.wingForClass(cls)})") },
-                                    onClick = {
-                                        selectedTargetScope = cls
-                                        classDropdownExpanded = false
-                                    },
-                                )
+                                        filteredTeachers.forEach { t ->
+                                            val subLabel = t.subject.ifBlank { t.className.ifBlank { "Faculty" } }
+                                            DropdownMenuItem(
+                                                text = { Text("${t.fullName} (${t.userId} • $subLabel)") },
+                                                onClick = {
+                                                    selectedTeacher = t
+                                                    teacherMenuOpen = false
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
-                    }
+                        AdminNewspaperTarget.SCHOOL_OR_CLASS -> {
+                            // Target Class / Wing Dropdown
+                            Box(modifier = Modifier.fillMaxWidth()) {
+                                OutlinedButton(
+                                    onClick = { classDropdownExpanded = true },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 52.dp)
+                                        .testTag("admin_circular_class_dropdown"),
+                                ) {
+                                    Icon(Icons.Filled.Class, contentDescription = "Select Class", modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("Target Class / Wing", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(
+                                            text = if (selectedTargetScope in SchoolCatalog.allClasses) {
+                                                val secLabel = if (selectedTargetSection == "ALL") "All Sections" else "Section $selectedTargetSection"
+                                                "$selectedTargetScope ($secLabel)"
+                                            } else {
+                                                selectedTargetScope
+                                            },
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                    Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
+                                }
+                                DropdownMenu(
+                                    expanded = classDropdownExpanded,
+                                    onDismissRequest = { classDropdownExpanded = false },
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("All Classes (Entire School)") },
+                                        onClick = {
+                                            selectedTargetScope = "All Classes"
+                                            classDropdownExpanded = false
+                                        },
+                                    )
+                                    SchoolCatalog.wings.forEach { wing ->
+                                        DropdownMenuItem(
+                                            text = { Text("Wing: ${wing.name} (${wing.classesLabel})") },
+                                            onClick = {
+                                                selectedTargetScope = "Wing: ${wing.name}"
+                                                classDropdownExpanded = false
+                                            },
+                                        )
+                                    }
+                                    HorizontalDivider()
+                                    SchoolCatalog.allClasses.forEach { cls ->
+                                        DropdownMenuItem(
+                                            text = { Text("$cls (${SchoolCatalog.wingForClass(cls)})") },
+                                            onClick = {
+                                                selectedTargetScope = cls
+                                                classDropdownExpanded = false
+                                            },
+                                        )
+                                    }
+                                }
+                            }
 
-                    if (selectedTargetScope in SchoolCatalog.allClasses) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        ) {
-                            FilterChip(
-                                selected = selectedTargetSection == "ALL",
-                                onClick = { selectedTargetSection = "ALL" },
-                                label = { Text("All Sections") },
-                            )
-                            SchoolCatalog.sections.forEach { sec ->
-                                FilterChip(
-                                    selected = selectedTargetSection == sec,
-                                    onClick = { selectedTargetSection = sec },
-                                    label = { Text("Sec $sec") },
-                                )
+                            if (selectedTargetScope in SchoolCatalog.allClasses) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                ) {
+                                    FilterChip(
+                                        selected = selectedTargetSection == "ALL",
+                                        onClick = { selectedTargetSection = "ALL" },
+                                        label = { Text("All Sections") },
+                                    )
+                                    SchoolCatalog.sections.forEach { sec ->
+                                        FilterChip(
+                                            selected = selectedTargetSection == sec,
+                                            onClick = { selectedTargetSection = sec },
+                                            label = { Text("Sec $sec") },
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
 
                     SchoolDatePickerField(
-                        label = "Circular / Holiday Date",
+                        label = "Publish Date",
                         selectedDate = date,
                         onDateSelected = { date = it },
                         modifier = Modifier.fillMaxWidth(),
@@ -1617,7 +1698,7 @@ private fun AdminCircularsTab(
                     OutlinedTextField(
                         value = content,
                         onValueChange = { content = it },
-                        label = { Text("Announcement Details") },
+                        label = { Text("Newspaper / Message Details") },
                         minLines = 3,
                         modifier = Modifier.fillMaxWidth().testTag("circular_content_input"),
                     )
@@ -1660,40 +1741,85 @@ private fun AdminCircularsTab(
                     Button(
                         onClick = {
                             if (title.isBlank() || content.isBlank()) {
-                                onShowMessage("Please enter circular title and announcement details.")
+                                onShowMessage("Please enter a headline and message details.")
                                 return@Button
                             }
-                            val tClass = if (selectedTargetScope in SchoolCatalog.allClasses) selectedTargetScope else ""
-                            val tSection = if (tClass.isNotBlank() && selectedTargetSection != "ALL") selectedTargetSection else ""
-                            val tWing = when {
-                                tClass.isNotBlank() -> SchoolCatalog.wingForClass(tClass)
-                                selectedTargetScope.startsWith("Wing: ") -> selectedTargetScope.removePrefix("Wing: ").trim()
-                                else -> ""
-                            }
-                            val audLabel = when {
-                                tClass.isNotBlank() && tSection.isNotBlank() -> "$tClass-$tSection"
-                                tClass.isNotBlank() -> "$tClass (All Sections)"
-                                tWing.isNotBlank() -> tWing
-                                else -> "All Classes"
+                            if (targetMode == AdminNewspaperTarget.SINGLE_TEACHER && selectedTeacher == null) {
+                                onShowMessage("Please select an individual teacher to message.")
+                                return@Button
                             }
 
-                            onPostCircular(
-                                Circular(
+                            val circular = when (targetMode) {
+                                AdminNewspaperTarget.ALL_TEACHERS -> Circular(
                                     title = title.trim(),
                                     category = category,
-                                    audience = audLabel,
-                                    targetWing = tWing,
-                                    targetClass = tClass,
-                                    targetSection = tSection,
+                                    audience = "All Teachers",
+                                    targetWing = "",
+                                    targetClass = "",
+                                    targetSection = "",
                                     date = date.ifBlank { SchoolCatalog.todayIso() },
                                     content = content.trim(),
                                     postedBy = adminUser.fullName,
+                                    recipientDocId = "",
+                                    recipientName = "All Teachers",
                                     senderRole = "ADMIN",
                                     attachmentName = pendingAttachment?.name ?: "",
                                     attachmentMimeType = pendingAttachment?.mimeType ?: "",
                                     attachmentData = pendingAttachment?.base64Data ?: "",
                                 )
-                            )
+                                AdminNewspaperTarget.SINGLE_TEACHER -> {
+                                    val rec = selectedTeacher!!
+                                    Circular(
+                                        title = title.trim(),
+                                        category = category,
+                                        audience = "Direct to Teacher",
+                                        targetWing = "",
+                                        targetClass = "",
+                                        targetSection = "",
+                                        date = date.ifBlank { SchoolCatalog.todayIso() },
+                                        content = content.trim(),
+                                        postedBy = adminUser.fullName,
+                                        recipientDocId = rec.id,
+                                        recipientName = "${rec.fullName} (${rec.userId})",
+                                        senderRole = "ADMIN",
+                                        attachmentName = pendingAttachment?.name ?: "",
+                                        attachmentMimeType = pendingAttachment?.mimeType ?: "",
+                                        attachmentData = pendingAttachment?.base64Data ?: "",
+                                    )
+                                }
+                                AdminNewspaperTarget.SCHOOL_OR_CLASS -> {
+                                    val tClass = if (selectedTargetScope in SchoolCatalog.allClasses) selectedTargetScope else ""
+                                    val tSection = if (tClass.isNotBlank() && selectedTargetSection != "ALL") selectedTargetSection else ""
+                                    val tWing = when {
+                                        tClass.isNotBlank() -> SchoolCatalog.wingForClass(tClass)
+                                        selectedTargetScope.startsWith("Wing: ") -> selectedTargetScope.removePrefix("Wing: ").trim()
+                                        else -> ""
+                                    }
+                                    val audLabel = when {
+                                        tClass.isNotBlank() && tSection.isNotBlank() -> "$tClass-$tSection"
+                                        tClass.isNotBlank() -> "$tClass (All Sections)"
+                                        tWing.isNotBlank() -> tWing
+                                        else -> "All Classes"
+                                    }
+                                    Circular(
+                                        title = title.trim(),
+                                        category = category,
+                                        audience = audLabel,
+                                        targetWing = tWing,
+                                        targetClass = tClass,
+                                        targetSection = tSection,
+                                        date = date.ifBlank { SchoolCatalog.todayIso() },
+                                        content = content.trim(),
+                                        postedBy = adminUser.fullName,
+                                        senderRole = "ADMIN",
+                                        attachmentName = pendingAttachment?.name ?: "",
+                                        attachmentMimeType = pendingAttachment?.mimeType ?: "",
+                                        attachmentData = pendingAttachment?.base64Data ?: "",
+                                    )
+                                }
+                            }
+
+                            onPostCircular(circular)
                             title = ""
                             content = ""
                             pendingAttachment = null
@@ -1704,17 +1830,32 @@ private fun AdminCircularsTab(
                     ) {
                         Icon(Icons.Filled.Campaign, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Publish Circular / Holiday Notice")
+                        Text(
+                            when (targetMode) {
+                                AdminNewspaperTarget.ALL_TEACHERS -> "Send Message to All Teachers"
+                                AdminNewspaperTarget.SINGLE_TEACHER -> "Send Message to ${selectedTeacher?.fullName ?: "Teacher"}"
+                                AdminNewspaperTarget.SCHOOL_OR_CLASS -> "Publish Newspaper / Circular"
+                            }
+                        )
                     }
                 }
             }
         }
 
         items(circulars, key = { it.id }) { c ->
+            val isAllTeachers = c.audience.equals("All Teachers", ignoreCase = true)
+            val isDirectTeacher = c.recipientDocId.isNotBlank()
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                border = BorderStroke(
+                    1.dp,
+                    when {
+                        isDirectTeacher -> IndigoAccent.copy(alpha = 0.55f)
+                        isAllTeachers -> EmeraldSuccess.copy(alpha = 0.55f)
+                        else -> MaterialTheme.colorScheme.outline
+                    },
+                ),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1726,17 +1867,28 @@ private fun AdminCircularsTab(
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
                         ) {
                             Surface(color = GoldSoft, shape = RoundedCornerShape(6.dp)) {
                                 Text(c.category, style = MaterialTheme.typography.labelSmall, color = NavyDeep, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
                             }
-                            if (c.recipientDocId.isNotBlank()) {
+                            if (isDirectTeacher) {
                                 Surface(color = IndigoAccent.copy(alpha = 0.14f), shape = RoundedCornerShape(6.dp)) {
                                     Text(
-                                        "To: ${c.recipientName}",
+                                        "Direct: ${c.recipientName.ifBlank { "Teacher" }}",
                                         style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
                                         color = IndigoAccent,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    )
+                                }
+                            } else if (isAllTeachers) {
+                                Surface(color = EmeraldContainer, shape = RoundedCornerShape(6.dp)) {
+                                    Text(
+                                        "ALL TEACHERS",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = EmeraldSuccess,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                                     )
                                 }

@@ -59,6 +59,8 @@ fun CraftStudioScreen(
     craftAiImageState: CraftAiImageState = CraftAiImageState.Idle,
     generatingPostId: String? = null,
     onGeneratePreviewImage: (title: String, category: String, description: String, materials: String) -> Unit = { _, _, _, _ -> },
+    onGenerateCustomAiImage: (prompt: String) -> Unit = {},
+    onEditAiImage: (sourceBase64: String, editPrompt: String) -> Unit = { _, _ -> },
     onClearPreviewImage: () -> Unit = {},
     onPublishProject: (CraftProject) -> Unit,
     onGenerateImageForPost: (CraftProject) -> Unit = {},
@@ -79,8 +81,15 @@ fun CraftStudioScreen(
     var materials by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var manualPhotoBase64 by remember { mutableStateOf("") }
+    var aiCreatePrompt by remember { mutableStateOf("") }
+    var aiEditPrompt by remember { mutableStateOf("") }
     var feedFilter by remember { mutableStateOf(CraftFeedFilter.ALL) }
     var zoomProject by remember { mutableStateOf<CraftProject?>(null) }
+
+    val aiSuccess = craftAiImageState as? CraftAiImageState.Success
+    val effectiveImageBase64 = aiSuccess?.base64Data?.ifBlank { manualPhotoBase64 } ?: manualPhotoBase64
+    val effectivePromptUsed = aiSuccess?.promptUsed ?: ""
+    val isAiGenerating = craftAiImageState is CraftAiImageState.Loading
 
     val photoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -90,7 +99,7 @@ fun CraftStudioScreen(
                 .onSuccess {
                     onClearPreviewImage()
                     manualPhotoBase64 = it.base64Data
-                    onShowMessage("Project photo attached!")
+                    onShowMessage("Project photo attached! You can also edit it with Gemini AI.")
                 }
                 .onFailure {
                     onShowMessage(it.localizedMessage ?: "Unable to read selected photo.")
@@ -98,8 +107,8 @@ fun CraftStudioScreen(
         }
     }
 
-    val activePreviewBitmap = remember(manualPhotoBase64) {
-        decodeAttachmentBitmap(manualPhotoBase64)
+    val activePreviewBitmap = remember(effectiveImageBase64) {
+        decodeAttachmentBitmap(effectiveImageBase64)
     }
 
     val filteredProjects = remember(projects, feedFilter) {
@@ -228,6 +237,7 @@ fun CraftStudioScreen(
                             onClick = {
                                 photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                             },
+                            enabled = !isAiGenerating,
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -236,7 +246,100 @@ fun CraftStudioScreen(
                         ) {
                             Icon(Icons.Filled.PhotoLibrary, contentDescription = "Pick Photo", modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text(if (manualPhotoBase64.isNotBlank()) "Change Attached Project Photo" else "Attach Project Photo (Optional)")
+                            Text(if (effectiveImageBase64.isNotBlank()) "Pick Different Photo from Gallery" else "Attach Photo from Gallery")
+                        }
+
+                        // Gemini AI Image Studio (Create & Edit with gemini-nano-banana-2.1)
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            border = BorderStroke(1.dp, IndigoAccent.copy(alpha = 0.4f)),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Icon(Icons.Filled.AutoAwesome, contentDescription = null, tint = IndigoAccent, modifier = Modifier.size(18.dp))
+                                    Text(
+                                        "AI Image Creator & Editor (Gemini)",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+                                OutlinedTextField(
+                                    value = aiCreatePrompt,
+                                    onValueChange = { aiCreatePrompt = it.take(400) },
+                                    label = { Text("Create Image Prompt (or leave blank to use project title)") },
+                                    placeholder = { Text("e.g. Working solar-powered model village for science exhibition") },
+                                    singleLine = false,
+                                    maxLines = 2,
+                                    modifier = Modifier.fillMaxWidth().testTag("craft_ai_create_prompt"),
+                                )
+                                FilledTonalButton(
+                                    onClick = {
+                                        if (aiCreatePrompt.isNotBlank()) {
+                                            onGenerateCustomAiImage(aiCreatePrompt.trim())
+                                        } else {
+                                            onGeneratePreviewImage(title, category, description, materials)
+                                        }
+                                    },
+                                    enabled = !isAiGenerating,
+                                    colors = ButtonDefaults.filledTonalButtonColors(
+                                        containerColor = IndigoAccent,
+                                        contentColor = Color.White,
+                                    ),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 48.dp)
+                                        .testTag("craft_ai_create_btn"),
+                                ) {
+                                    Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Create Image with AI")
+                                }
+
+                                if (isAiGenerating) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        modifier = Modifier.padding(vertical = 4.dp),
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(20.dp),
+                                            strokeWidth = 2.dp,
+                                            color = IndigoAccent,
+                                        )
+                                        Text(
+                                            "Generating / editing image with Gemini (may take 30–60s)...",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+
+                                val aiErr = craftAiImageState as? CraftAiImageState.Error
+                                if (aiErr != null) {
+                                    Surface(
+                                        color = RoseContainer,
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.fillMaxWidth().testTag("craft_ai_error_box"),
+                                    ) {
+                                        Text(
+                                            aiErr.message,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = RoseError,
+                                            modifier = Modifier.padding(10.dp),
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         if (activePreviewBitmap != null) {
@@ -246,10 +349,10 @@ fun CraftStudioScreen(
                                 color = MaterialTheme.colorScheme.surfaceVariant,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Column {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Image(
                                         bitmap = activePreviewBitmap,
-                                        contentDescription = "Craft preview image",
+                                        contentDescription = "Project preview image",
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -259,14 +362,19 @@ fun CraftStudioScreen(
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                                            .padding(horizontal = 12.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                            Icon(Icons.Filled.PhotoCamera, contentDescription = null, tint = GoldAmberDark, modifier = Modifier.size(16.dp))
+                                            Icon(
+                                                if (aiSuccess != null) Icons.Filled.AutoAwesome else Icons.Filled.PhotoCamera,
+                                                contentDescription = null,
+                                                tint = GoldAmberDark,
+                                                modifier = Modifier.size(16.dp),
+                                            )
                                             Text(
-                                                "Attached Project Photo Ready",
+                                                if (aiSuccess != null) "AI Image Ready" else "Project Photo Ready",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 fontWeight = FontWeight.Bold,
                                                 color = MaterialTheme.colorScheme.onSurface,
@@ -275,9 +383,40 @@ fun CraftStudioScreen(
                                         TextButton(
                                             onClick = {
                                                 manualPhotoBase64 = ""
+                                                aiEditPrompt = ""
                                                 onClearPreviewImage()
                                             },
                                         ) { Text("Remove") }
+                                    }
+
+                                    // Edit Current Image with Gemini AI
+                                    Column(
+                                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        OutlinedTextField(
+                                            value = aiEditPrompt,
+                                            onValueChange = { aiEditPrompt = it.take(350) },
+                                            label = { Text("Edit This Image with AI") },
+                                            placeholder = { Text("e.g. Add warm sunlight, make background a science fair") },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth().testTag("craft_ai_edit_prompt"),
+                                        )
+                                        OutlinedButton(
+                                            onClick = {
+                                                onEditAiImage(effectiveImageBase64, aiEditPrompt.trim())
+                                            },
+                                            enabled = !isAiGenerating && aiEditPrompt.isNotBlank(),
+                                            shape = RoundedCornerShape(10.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(min = 48.dp)
+                                                .testTag("craft_ai_edit_btn"),
+                                        ) {
+                                            Icon(Icons.Filled.AutoFixHigh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(8.dp))
+                                            Text("Apply AI Edit to Current Image")
+                                        }
                                     }
                                 }
                             }
@@ -306,8 +445,8 @@ fun CraftStudioScreen(
                                         authorRole = currentUser.role,
                                         classInfo = classInfo,
                                         dateLabel = SchoolCatalog.todayIso(),
-                                        aiImageData = manualPhotoBase64,
-                                        aiPromptUsed = "",
+                                        aiImageData = effectiveImageBase64,
+                                        aiPromptUsed = effectivePromptUsed,
                                         likesCount = 0L,
                                     )
                                 )
@@ -315,6 +454,9 @@ fun CraftStudioScreen(
                                 materials = ""
                                 description = ""
                                 manualPhotoBase64 = ""
+                                aiCreatePrompt = ""
+                                aiEditPrompt = ""
+                                onClearPreviewImage()
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
                             shape = RoundedCornerShape(12.dp),

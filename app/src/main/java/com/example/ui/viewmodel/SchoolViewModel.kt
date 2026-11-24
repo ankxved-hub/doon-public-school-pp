@@ -1,5 +1,7 @@
 package com.example.ui.viewmodel
 
+import android.graphics.BitmapFactory
+import android.util.Base64
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -43,18 +45,32 @@ data class AiChatMessage(
     val text: String,
 )
 
+enum class GeminiChatModel(
+    val modelId: String,
+    val label: String,
+    val subtitle: String,
+) {
+    GENERAL("gemini-3.8-flash", "General", "Balanced daily school assistant"),
+    FAST("gemini-3.5-flash-lite", "Fast", "Ultra-fast answers & summaries"),
+    DEEP("gemini-4-argon", "Deep Reasoning", "Step-by-step STEM & complex tasks"),
+}
+
 enum class AiTutorPersona(val label: String, val systemRole: String) {
     STUDY_TUTOR(
-        label = "CBSE Study Tutor",
+        label = "Study Tutor",
         systemRole = "You are a patient, crystal-clear CBSE Study Tutor for Doon Public School, Etah. Explain Maths, Science, English, and Social Science concepts step-by-step aligned to NCERT."
     ),
-    CRAFT_MENTOR(
-        label = "Craft & Project Mentor",
-        systemRole = "You are a creative Art, Craft & STEM Exhibition Mentor for Doon Public School, Etah. Suggest safe low-cost materials, step-by-step model building guides, and science fair presentation tips."
-    ),
     DPT_COACH(
-        label = "DPT Quiz Coach",
-        systemRole = "You are a fast-paced Daily Practice Test (DPT) & Board Exam Coach for Doon Public School, Etah. Generate concise practice MCQs, highlight common mistakes, and test student understanding."
+        label = "DPT & Test Planner",
+        systemRole = "You are a Daily Practice Test (DPT) & Exam Assistant for Doon Public School, Etah. Help teachers draft practice test questions, deadlines, and rubrics, and help students revise with concise MCQs."
+    ),
+    CIRCULAR_WRITER(
+        label = "Circular & Notice Writer",
+        systemRole = "You are an official School Communication Assistant for Doon Public School, Etah. Draft clear, polite, well-structured Principal circulars, school newspaper notices, and teacher messages."
+    ),
+    CRAFT_MENTOR(
+        label = "Craft & STEM Mentor",
+        systemRole = "You are a creative Art, Craft & STEM Exhibition Mentor for Doon Public School, Etah. Suggest safe low-cost materials, step-by-step model building guides, and science fair presentation tips."
     ),
 }
 
@@ -248,12 +264,15 @@ class SchoolViewModel(
             likes.filter { it.likerId == currentDocId }.map { it.projectId }.toSet()
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), emptySet())
 
-    // Gemini Multi-Turn AI Study Tutor & Mentor State (retained for signature compatibility)
+    // Gemini Multi-Turn AI Assistant State
     private val _aiPersona = MutableStateFlow(AiTutorPersona.STUDY_TUTOR)
     val aiPersona: StateFlow<AiTutorPersona> = _aiPersona.asStateFlow()
 
-    private fun buildAiModel(persona: AiTutorPersona) = Firebase.ai.generativeModel(
-        modelName = "gemini-3.8-flash",
+    private val _selectedAiModel = MutableStateFlow(GeminiChatModel.GENERAL)
+    val selectedAiModel: StateFlow<GeminiChatModel> = _selectedAiModel.asStateFlow()
+
+    private fun buildAiModel(persona: AiTutorPersona, model: GeminiChatModel) = Firebase.ai.generativeModel(
+        modelName = model.modelId,
         systemInstruction = content {
             text(
                 """
@@ -1306,11 +1325,15 @@ class SchoolViewModel(
         _aiPersona.value = persona
     }
 
+    fun selectAiModel(model: GeminiChatModel) {
+        _selectedAiModel.value = model
+    }
+
     fun clearAiChatHistory() {
         _aiMessages.value = listOf(
             AiChatMessage(
                 isUser = false,
-                text = "New conversation started."
+                text = "New conversation started. How can I help you at Doon Public School, Etah?"
             )
         )
         _aiTutorState.value = AiTutorUiState.Idle
@@ -1343,11 +1366,20 @@ class SchoolViewModel(
             return
         }
         val prompt = buildCraftVisualPrompt(title.trim(), category.trim(), description.trim(), materials.trim())
+        generateCustomAiImage(prompt)
+    }
+
+    fun generateCustomAiImage(prompt: String) {
+        val cleanPrompt = prompt.trim()
+        if (cleanPrompt.isBlank()) {
+            _craftAiImageState.value = CraftAiImageState.Error("Please enter a prompt describing the image you want to create.")
+            return
+        }
         viewModelScope.launch {
             _craftAiImageState.value = CraftAiImageState.Loading
             try {
                 val bitmap = withTimeout(60_000L) {
-                    val response = craftImageModel.generateContent(prompt)
+                    val response = craftImageModel.generateContent(cleanPrompt)
                     response.candidates.firstOrNull()
                         ?.content?.parts?.filterIsInstance<ImagePart>()
                         ?.firstOrNull()
@@ -1357,18 +1389,70 @@ class SchoolViewModel(
                     val base64 = withContext(Dispatchers.Default) {
                         encodeBitmapToBase64(bitmap)
                     }
-                    _craftAiImageState.value = CraftAiImageState.Success(base64Data = base64, promptUsed = prompt)
+                    _craftAiImageState.value = CraftAiImageState.Success(base64Data = base64, promptUsed = cleanPrompt)
                 } else {
-                    _craftAiImageState.value = CraftAiImageState.Error("Model did not return an image.")
+                    _craftAiImageState.value = CraftAiImageState.Error("Gemini did not return an image. Try refining your prompt.")
                 }
             } catch (e: TimeoutCancellationException) {
-                _craftAiImageState.value = CraftAiImageState.Error("Image generation timed out.")
+                _craftAiImageState.value = CraftAiImageState.Error("Image generation timed out after 60s. Please retry.")
             } catch (e: QuotaExceededException) {
-                _craftAiImageState.value = CraftAiImageState.Error("Quota limit reached.")
+                _craftAiImageState.value = CraftAiImageState.Error("AI image quota limit reached. Please try again later.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _craftAiImageState.value = CraftAiImageState.Error(e.localizedMessage ?: "Failed to generate craft image.")
+                _craftAiImageState.value = CraftAiImageState.Error(e.localizedMessage ?: "Failed to create AI image.")
+            }
+        }
+    }
+
+    fun editCraftAiImage(sourceBase64: String, editPrompt: String) {
+        val cleanEdit = editPrompt.trim()
+        if (sourceBase64.isBlank()) {
+            _craftAiImageState.value = CraftAiImageState.Error("Attach or create an image first before editing.")
+            return
+        }
+        if (cleanEdit.isBlank()) {
+            _craftAiImageState.value = CraftAiImageState.Error("Describe what changes you want Gemini to apply to the image.")
+            return
+        }
+        viewModelScope.launch {
+            _craftAiImageState.value = CraftAiImageState.Loading
+            try {
+                val inputBitmap = withContext(Dispatchers.Default) {
+                    val bytes = Base64.decode(sourceBase64, Base64.DEFAULT)
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                }
+                if (inputBitmap == null) {
+                    _craftAiImageState.value = CraftAiImageState.Error("Could not decode the source image for editing.")
+                    return@launch
+                }
+                val editedBitmap = withTimeout(60_000L) {
+                    val editContent = content {
+                        image(inputBitmap)
+                        text(cleanEdit)
+                    }
+                    val response = craftImageModel.generateContent(editContent)
+                    response.candidates.firstOrNull()
+                        ?.content?.parts?.filterIsInstance<ImagePart>()
+                        ?.firstOrNull()
+                        ?.image
+                }
+                if (editedBitmap != null) {
+                    val base64 = withContext(Dispatchers.Default) {
+                        encodeBitmapToBase64(editedBitmap)
+                    }
+                    _craftAiImageState.value = CraftAiImageState.Success(base64Data = base64, promptUsed = cleanEdit)
+                } else {
+                    _craftAiImageState.value = CraftAiImageState.Error("Gemini did not return an edited image. Try a clearer edit instruction.")
+                }
+            } catch (e: TimeoutCancellationException) {
+                _craftAiImageState.value = CraftAiImageState.Error("Image editing timed out after 60s. Please retry.")
+            } catch (e: QuotaExceededException) {
+                _craftAiImageState.value = CraftAiImageState.Error("AI image quota limit reached. Please try again later.")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _craftAiImageState.value = CraftAiImageState.Error(e.localizedMessage ?: "Failed to edit image.")
             }
         }
     }
@@ -1453,7 +1537,7 @@ class SchoolViewModel(
         }
     }
 
-    fun askAiTutor(student: SchoolUser, question: String) {
+    fun askAiTutor(user: SchoolUser, question: String) {
         val trimmed = question.trim()
         if (trimmed.isEmpty() || _aiTutorState.value is AiTutorUiState.Loading || _aiTutorState.value is AiTutorUiState.Streaming) {
             return
@@ -1464,11 +1548,19 @@ class SchoolViewModel(
         _aiMessages.value = _aiMessages.value + AiChatMessage(isUser = true, text = trimmed)
         _aiTutorState.value = AiTutorUiState.Loading
         viewModelScope.launch {
-            val classDesc = if (student.className.isNotBlank()) "${student.className}-${student.section}" else student.wing
-            val fullPrompt = "Student: ${student.fullName} ($classDesc). Question: $trimmed"
+            val roleContext = when (user.role) {
+                "ADMIN" -> "Principal / Admin: ${user.fullName}"
+                "TEACHER" -> "Teacher: ${user.fullName} (Class ${user.className}-${user.section}, Subjects: ${user.subject})"
+                "FEE_MANAGER" -> "Fee Manager: ${user.fullName}"
+                else -> {
+                    val classDesc = if (user.className.isNotBlank()) "${user.className}-${user.section}" else user.wing
+                    "Student: ${user.fullName} ($classDesc)"
+                }
+            }
+            val fullPrompt = "$roleContext. Message: $trimmed"
             val sb = StringBuilder()
             try {
-                val activeModel = buildAiModel(_aiPersona.value)
+                val activeModel = buildAiModel(_aiPersona.value, _selectedAiModel.value)
                 val chatSession = activeModel.startChat(history = priorHistory)
                 withTimeout(60_000L) {
                     chatSession.sendMessageStream(fullPrompt).collect { chunk ->
@@ -1484,12 +1576,16 @@ class SchoolViewModel(
                     _aiMessages.value = _aiMessages.value + AiChatMessage(isUser = false, text = finalAnswer)
                     _aiTutorState.value = AiTutorUiState.Idle
                 } else {
-                    _aiTutorState.value = AiTutorUiState.Error("Empty response.")
+                    _aiTutorState.value = AiTutorUiState.Error("Gemini returned an empty response. Please try again.")
                 }
+            } catch (e: TimeoutCancellationException) {
+                _aiTutorState.value = AiTutorUiState.Error("Response timed out after 60s. Please retry or switch to Fast model.")
+            } catch (e: QuotaExceededException) {
+                _aiTutorState.value = AiTutorUiState.Error("AI quota limit reached. Please try again shortly.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _aiTutorState.value = AiTutorUiState.Error(e.localizedMessage ?: "Request failed.")
+                _aiTutorState.value = AiTutorUiState.Error(e.localizedMessage ?: "AI request failed.")
             }
         }
     }

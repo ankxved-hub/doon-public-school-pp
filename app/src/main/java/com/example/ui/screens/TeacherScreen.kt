@@ -32,6 +32,7 @@ import com.example.ui.components.AttachmentPreviewBlock
 import com.example.ui.components.PickedAttachment
 import com.example.ui.components.SchoolDatePickerField
 import com.example.ui.components.StudentDptResultCard
+import com.example.ui.components.TeacherDailyPracticeTestsDashboard
 import com.example.ui.components.readAttachmentFromUri
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.CraftAiImageState
@@ -69,6 +70,8 @@ fun TeacherScreen(
     onDeleteStudent: (SchoolUser) -> Unit = {},
     onSaveTimetable: (String, String, List<SchoolCatalog.TimetableSlot>, String) -> Unit = { _, _, _, _ -> },
     onGenerateCraftAiImage: (String, String, String, String) -> Unit = { _, _, _, _ -> },
+    onGenerateCustomAiImage: (String) -> Unit = {},
+    onEditCraftAiImage: (String, String) -> Unit = { _, _ -> },
     onClearCraftPreview: () -> Unit = {},
     onPublishCraftProject: (CraftProject) -> Unit = {},
     onGenerateCraftImageForPost: (CraftProject) -> Unit = {},
@@ -142,6 +145,8 @@ fun TeacherScreen(
             craftAiImageState = craftAiImageState,
             generatingPostId = generatingCraftPostId,
             onGeneratePreviewImage = onGenerateCraftAiImage,
+            onGenerateCustomAiImage = onGenerateCustomAiImage,
+            onEditAiImage = onEditCraftAiImage,
             onClearPreviewImage = onClearCraftPreview,
             onPublishProject = onPublishCraftProject,
             onGenerateImageForPost = onGenerateCraftImageForPost,
@@ -289,16 +294,17 @@ fun TeacherScreen(
         }
 
         when (activeTab) {
-            0 -> DailyDptTab(
+            0 -> TeacherDailyPracticeTestsDashboard(
                 teacher = teacher,
                 selectedDate = selectedDate,
                 onDateChange = { selectedDate = it },
                 selectedClass = selectedClass,
                 selectedSection = selectedSection,
                 selectedSubject = selectedSubject,
+                subjectsForClass = subjectsForCls,
                 dptDaily = dptDaily,
                 onSaveDailyDpt = onSaveDailyDpt,
-                onDeleteDpt = { onDeleteRecord("dptDaily", it.id, "DPT Log") },
+                onDeleteDpt = { onDeleteRecord("dptDaily", it.id, "Practice Test") },
                 onShowMessage = onShowMessage,
             )
             1 -> WeeklyDptTab(
@@ -358,6 +364,8 @@ fun TeacherScreen(
                 onDeleteStudent = onDeleteStudent,
                 onSaveTimetable = onSaveTimetable,
                 onGenerateCraftAiImage = onGenerateCraftAiImage,
+                onGenerateCustomAiImage = onGenerateCustomAiImage,
+                onEditCraftAiImage = onEditCraftAiImage,
                 onClearCraftPreview = onClearCraftPreview,
                 onPublishCraftProject = onPublishCraftProject,
                 onGenerateCraftImageForPost = onGenerateCraftImageForPost,
@@ -401,6 +409,8 @@ private fun TeacherDiaryOrCraftTab(
     onDeleteStudent: (SchoolUser) -> Unit,
     onSaveTimetable: (String, String, List<SchoolCatalog.TimetableSlot>, String) -> Unit,
     onGenerateCraftAiImage: (String, String, String, String) -> Unit,
+    onGenerateCustomAiImage: (String) -> Unit,
+    onEditCraftAiImage: (String, String) -> Unit,
     onClearCraftPreview: () -> Unit,
     onPublishCraftProject: (CraftProject) -> Unit,
     onGenerateCraftImageForPost: (CraftProject) -> Unit,
@@ -452,6 +462,8 @@ private fun TeacherDiaryOrCraftTab(
                 craftAiImageState = craftAiImageState,
                 generatingPostId = generatingCraftPostId,
                 onGeneratePreviewImage = onGenerateCraftAiImage,
+                onGenerateCustomAiImage = onGenerateCustomAiImage,
+                onEditAiImage = onEditCraftAiImage,
                 onClearPreviewImage = onClearCraftPreview,
                 onPublishProject = onPublishCraftProject,
                 onGenerateImageForPost = onGenerateCraftImageForPost,
@@ -493,389 +505,6 @@ private fun TeacherDiaryOrCraftTab(
                     onReplyDoubt = onReplyDoubt,
                     onDeleteHomework = onDeleteHomework,
                 )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DailyDptTab(
-    teacher: SchoolUser,
-    selectedDate: String,
-    onDateChange: (String) -> Unit,
-    selectedClass: String,
-    selectedSection: String,
-    selectedSubject: String,
-    dptDaily: List<DptDaily>,
-    onSaveDailyDpt: (DptDaily) -> Unit,
-    onDeleteDpt: (DptDaily) -> Unit,
-    onShowMessage: (String) -> Unit,
-) {
-    val context = LocalContext.current
-    var assessmentType by remember { mutableStateOf("DPT") } // "DPT" | "EXAM"
-    var heldToday by remember { mutableStateOf(true) }
-    var topic by remember { mutableStateOf("") }
-    var maxMarks by remember { mutableStateOf("20") }
-    var notes by remember { mutableStateOf("") }
-    var reason by remember { mutableStateOf(SchoolCatalog.dptNotHeldReasons.first()) }
-    var pendingAttachment by remember { mutableStateOf<PickedAttachment?>(null) }
-    var validationError by remember { mutableStateOf<String?>(null) }
-
-    val photoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia(),
-        onResult = { uri ->
-            if (uri != null) {
-                readAttachmentFromUri(context, uri, forceImage = true)
-                    .onSuccess { pendingAttachment = it }
-                    .onFailure { onShowMessage(it.localizedMessage ?: "Unable to load selected photo.") }
-            }
-        },
-    )
-
-    val documentPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument(),
-        onResult = { uri ->
-            if (uri != null) {
-                readAttachmentFromUri(context, uri, forceImage = false)
-                    .onSuccess { pendingAttachment = it }
-                    .onFailure { onShowMessage(it.localizedMessage ?: "Unable to read selected document.") }
-            }
-        },
-    )
-
-    val matchingLogs = remember(dptDaily, selectedClass, selectedSection) {
-        dptDaily.filter { it.className == selectedClass && it.section == selectedSection }
-            .sortedByDescending { it.date }
-    }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item {
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, if (assessmentType == "EXAM") IndigoAccent else MaterialTheme.colorScheme.outline),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        if (assessmentType == "EXAM") "Exam Tracker ($selectedClass-$selectedSection • $selectedSubject)"
-                        else "Daily DPT Tracker ($selectedClass-$selectedSection • $selectedSubject)",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-
-                    // Switch between Daily DPT and Exam
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        FilterChip(
-                            selected = assessmentType == "DPT",
-                            onClick = {
-                                assessmentType = "DPT"
-                                if (maxMarks == "100") maxMarks = "20"
-                                validationError = null
-                            },
-                            label = { Text("Daily DPT") },
-                            leadingIcon = { Icon(Icons.Filled.Quiz, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                            modifier = Modifier.weight(1f).testTag("switch_mode_dpt"),
-                        )
-                        FilterChip(
-                            selected = assessmentType == "EXAM",
-                            onClick = {
-                                assessmentType = "EXAM"
-                                if (maxMarks == "20" || maxMarks == "10") maxMarks = "100"
-                                validationError = null
-                            },
-                            label = { Text("Exam Mode") },
-                            leadingIcon = { Icon(Icons.Filled.WorkspacePremium, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                            modifier = Modifier.weight(1f).testTag("switch_mode_exam"),
-                        )
-                    }
-
-                    OutlinedTextField(
-                        value = selectedDate,
-                        onValueChange = onDateChange,
-                        label = { Text(if (assessmentType == "EXAM") "Exam Date (YYYY-MM-DD)" else "DPT Date (YYYY-MM-DD)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            if (assessmentType == "EXAM") "Was Exam Held Today?" else "Was DPT Held Today?",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(
-                                selected = heldToday,
-                                onClick = {
-                                    heldToday = true
-                                    validationError = null
-                                },
-                                label = { Text("YES (Held)") },
-                                modifier = Modifier.testTag("dpt_held_yes"),
-                            )
-                            FilterChip(
-                                selected = !heldToday,
-                                onClick = {
-                                    heldToday = false
-                                    validationError = null
-                                },
-                                label = { Text("NO (Not Held)") },
-                                modifier = Modifier.testTag("dpt_held_no"),
-                            )
-                        }
-                    }
-
-                    if (heldToday) {
-                        OutlinedTextField(
-                            value = topic,
-                            onValueChange = {
-                                topic = it.take(200)
-                                if (validationError != null) validationError = null
-                            },
-                            label = { Text(if (assessmentType == "EXAM") "Exam Title / Syllabus Topic" else "DPT Topic Name") },
-                            isError = validationError != null && topic.isBlank(),
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth().testTag("dpt_topic_input"),
-                        )
-                        OutlinedTextField(
-                            value = maxMarks,
-                            onValueChange = { raw ->
-                                val digits = raw.filter { it.isDigit() }.take(3)
-                                val num = digits.toIntOrNull()
-                                maxMarks = if (num != null && num > 100) "100" else digits
-                                if (validationError != null) validationError = null
-                            },
-                            label = { Text("Maximum Marks (1 – 100)") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.fillMaxWidth().testTag("dpt_max_marks_input"),
-                        )
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        ) {
-                            listOf("10", "20", "25", "50", "80", "100").forEach { preset ->
-                                FilterChip(
-                                    selected = maxMarks == preset,
-                                    onClick = { maxMarks = preset },
-                                    label = { Text(preset) },
-                                )
-                            }
-                        }
-                        OutlinedTextField(
-                            value = notes,
-                            onValueChange = { notes = it.take(1000) },
-                            label = { Text("Optional Questions / Notes") },
-                            minLines = 2,
-                            modifier = Modifier.fillMaxWidth().testTag("dpt_notes_input"),
-                        )
-                        // Photo / Document attachment inside Optional Questions / Notes
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            OutlinedButton(
-                                onClick = {
-                                    photoPickerLauncher.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                    )
-                                },
-                                modifier = Modifier.weight(1f).testTag("dpt_attach_photo_btn"),
-                            ) {
-                                Icon(Icons.Filled.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("Question Photo", style = MaterialTheme.typography.labelSmall)
-                            }
-                            OutlinedButton(
-                                onClick = {
-                                    documentPickerLauncher.launch(
-                                        arrayOf(
-                                            "application/pdf",
-                                            "application/msword",
-                                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                            "text/plain",
-                                            "image/*",
-                                        )
-                                    )
-                                },
-                                modifier = Modifier.weight(1f).testTag("dpt_attach_doc_btn"),
-                            ) {
-                                Icon(Icons.Filled.AttachFile, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("Attach Doc/PDF", style = MaterialTheme.typography.labelSmall)
-                            }
-                        }
-                        AttachmentPickerChip(
-                            attachment = pendingAttachment,
-                            onClear = { pendingAttachment = null },
-                        )
-                    } else {
-                        Text("Select Reason:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        ) {
-                            SchoolCatalog.dptNotHeldReasons.forEach { r ->
-                                FilterChip(
-                                    selected = reason == r,
-                                    onClick = {
-                                        reason = r
-                                        validationError = null
-                                    },
-                                    label = { Text(r) },
-                                )
-                            }
-                        }
-                        OutlinedTextField(
-                            value = reason,
-                            onValueChange = {
-                                reason = it.take(200)
-                                if (validationError != null) validationError = null
-                            },
-                            label = { Text("Reason Details") },
-                            isError = validationError != null && reason.isBlank(),
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth().testTag("dpt_reason_input"),
-                        )
-                    }
-
-                    if (validationError != null) {
-                        Text(
-                            validationError.orEmpty(),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-
-                    Button(
-                        onClick = {
-                            if (heldToday && topic.isBlank()) {
-                                validationError = "Please enter the ${if (assessmentType == "EXAM") "Exam Title" else "DPT Topic Name"} before publishing."
-                                return@Button
-                            }
-                            if (!heldToday && reason.isBlank()) {
-                                validationError = "Please select or enter a reason why it was not held."
-                                return@Button
-                            }
-                            val parsedMax = if (heldToday) {
-                                val rawNum = maxMarks.toLongOrNull() ?: if (assessmentType == "EXAM") 100L else 20L
-                                if (rawNum !in 1L..100L) {
-                                    validationError = "Maximum Marks must be between 1 and 100."
-                                    return@Button
-                                }
-                                rawNum
-                            } else 0L
-
-                            validationError = null
-                            val att = if (heldToday) pendingAttachment else null
-                            onSaveDailyDpt(
-                                DptDaily(
-                                    date = selectedDate.trim().ifBlank { SchoolCatalog.todayIso() }.take(20),
-                                    className = selectedClass,
-                                    section = selectedSection,
-                                    subject = selectedSubject,
-                                    assessmentType = assessmentType,
-                                    held = heldToday,
-                                    topic = if (heldToday) topic.trim().take(200) else "",
-                                    maxMarks = parsedMax,
-                                    notes = if (heldToday) notes.trim().take(1000) else "",
-                                    reason = if (!heldToday) reason.trim().take(200) else "",
-                                    attachmentName = att?.name ?: "",
-                                    attachmentMimeType = att?.mimeType ?: "",
-                                    attachmentData = att?.base64Data ?: "",
-                                    teacherId = teacher.userId.ifBlank { "TCH" },
-                                    teacherName = teacher.fullName.ifBlank { "Teacher" },
-                                )
-                            )
-                            topic = ""
-                            notes = ""
-                            pendingAttachment = null
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = NavyDeep, contentColor = GoldAmber),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("dpt_publish_btn"),
-                    ) {
-                        Icon(Icons.Filled.Publish, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (assessmentType == "EXAM") "Publish Exam Status" else "Publish Daily DPT Status")
-                    }
-                }
-            }
-        }
-
-        item {
-            Text("PUBLISHED DPT & EXAM LOGS ($selectedClass-$selectedSection)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        items(matchingLogs, key = { it.id }) { log ->
-            val isExam = log.assessmentType == "EXAM"
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, if (isExam) IndigoAccent.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Surface(
-                                    color = if (isExam) Color(0xFFE0E7FF) else GoldSoft,
-                                    shape = RoundedCornerShape(6.dp),
-                                ) {
-                                    Text(
-                                        if (isExam) "EXAM" else "DPT",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isExam) NavyDeep else GoldAmberDark,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                    )
-                                }
-                                Text("${log.subject} (${log.date})", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-                                Surface(color = if (log.held) EmeraldContainer else GoldSoft, shape = RoundedCornerShape(6.dp)) {
-                                    Text(
-                                        if (log.held) "HELD" else "NOT HELD",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (log.held) EmeraldSuccess else GoldAmberDark,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                    )
-                                }
-                            }
-                            if (log.held) {
-                                Text("Topic: ${log.topic} • Max: ${log.maxMarks}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                if (log.notes.isNotBlank()) Text(log.notes, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            } else {
-                                Text("Reason: ${log.reason}", style = MaterialTheme.typography.bodyMedium, color = GoldAmberDark)
-                            }
-                        }
-                        IconButton(onClick = { onDeleteDpt(log) }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Delete DPT", tint = RoseError)
-                        }
-                    }
-                    if (log.held && log.attachmentData.isNotBlank()) {
-                        AttachmentPreviewBlock(
-                            attachmentName = log.attachmentName,
-                            attachmentMimeType = log.attachmentMimeType,
-                            attachmentData = log.attachmentData,
-                            onShowMessage = onShowMessage,
-                        )
-                    }
-                }
             }
         }
     }

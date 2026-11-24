@@ -974,6 +974,8 @@ function renderStudentPortal(tabIdx) {
   const student = d.currentUser;
   const gw = d.gateway || {};
   const circulars = (d.circulars || []).filter((c) => {
+    const aud = String(c.audience || "").toLowerCase();
+    if (aud === "all teachers" || aud.startsWith("direct to teacher")) return false;
     const recId = pick(c, "recipientDocId", "recipient_doc_id", "");
     if (recId) return recId === student.id;
     const tc = pick(c, "targetClass", "target_class", "");
@@ -2793,16 +2795,7 @@ function renderAdminPortal(tabIdx) {
       el("section", { className: "card" }, [
         el("div", { className: "section-title" }, [
           formTitle,
-          el("div", { className: "btn-row" }, [
-            el("a", {
-              href: "/teacher-guide.html",
-              target: "_blank",
-              rel: "noopener noreferrer",
-              className: "btn btn-outline btn-sm",
-              textContent: "Teacher Login Guide (PDF)",
-            }),
-            cancelEditBtn,
-          ]),
+          cancelEditBtn,
         ]),
         el("form", {
           className: "form-grid",
@@ -2957,60 +2950,116 @@ function renderAdminPortal(tabIdx) {
   }
 
   if (tabIdx === 2) {
-    // Circulars & Holidays Publisher (with Class & Section Dropdowns)
+    // School Newspaper, Circulars & Teacher Messages (All Teachers & Individual Teacher)
     let title = "";
-    let category = "Notice";
+    let category = "Newspaper";
+    let targetMode = "SCHOOL"; // SCHOOL | ALL_TEACHERS | SINGLE_TEACHER
     let targetWing = "All Wings";
     let targetClass = "";
     let targetSection = "";
+    let recipientDocId = "";
     let content = "";
+
+    const teacherUsers = (d.users || []).filter((u) => u.role === "TEACHER");
+    const teacherSelect = el("select", { className: "select", onChange: (e) => { recipientDocId = e.target.value; } }, [
+      el("option", { value: "", textContent: "Select Individual Teacher..." }),
+      ...teacherUsers.map((t) =>
+        el("option", { value: t.id, textContent: `${t.fullName} (${t.userId}${t.subject ? ` • ${t.subject}` : ""})` })
+      ),
+    ]);
+    const teacherField = el("div", { className: "field", style: { display: "none" } }, [
+      el("label", { textContent: "Recipient Teacher" }),
+      teacherSelect,
+    ]);
+    const wingField = el("div", { className: "field" }, [
+      el("label", { textContent: "Target Wing" }),
+      el("select", { className: "select", onChange: (e) => { targetWing = e.target.value; } }, [
+        el("option", { value: "All Wings", textContent: "All Wings" }),
+        ...WINGS.map((w) => el("option", { value: w.name, textContent: w.name })),
+      ]),
+    ]);
+    const classField = el("div", { className: "field" }, [
+      el("label", { textContent: "Target Class / Section (optional)" }),
+      el("div", { className: "btn-row" }, [
+        el("select", { className: "select", style: { flex: 1 }, onChange: (e) => { targetClass = e.target.value; } }, [
+          el("option", { value: "", textContent: "All Classes" }),
+          ...ALL_CLASSES.map((c) => el("option", { value: c, textContent: c })),
+        ]),
+        el("select", { className: "select", style: { width: "100px" }, onChange: (e) => { targetSection = e.target.value; } }, [
+          el("option", { value: "", textContent: "All Sec" }),
+          ...SECTIONS.map((s) => el("option", { value: s, textContent: `Sec ${s}` })),
+        ]),
+      ]),
+    ]);
 
     return el("div", { className: "item-list", style: { gap: "16px" } }, [
       el("section", { className: "card" }, [
-        el("h3", { className: "section-title", textContent: "Publish Official Circular / Holiday Notice" }),
+        el("h3", { className: "section-title", textContent: "School Newspaper, Circulars & Teacher Messages" }),
         el("form", {
           className: "form-grid",
           onSubmit: async (e) => {
             e.preventDefault();
-            const audience = targetClass ? `${targetClass}${targetSection ? `-${targetSection}` : ""}` : targetWing;
+            if (!title.trim() || !content.trim()) {
+              showToast("Enter headline and message content.");
+              return;
+            }
+            let payload;
+            if (targetMode === "ALL_TEACHERS") {
+              payload = {
+                title, category, audience: "All Teachers", targetWing: "", targetClass: "", targetSection: "",
+                recipientDocId: "", recipientName: "All Teachers", date: todayIso(), content,
+              };
+            } else if (targetMode === "SINGLE_TEACHER") {
+              const rec = teacherUsers.find((t) => t.id === recipientDocId);
+              if (!rec) {
+                showToast("Please select an individual teacher.");
+                return;
+              }
+              payload = {
+                title, category, audience: "Direct to Teacher", targetWing: "", targetClass: "", targetSection: "",
+                recipientDocId: rec.id, recipientName: `${rec.fullName} (${rec.userId})`, date: todayIso(), content,
+              };
+            } else {
+              const audience = targetClass ? `${targetClass}${targetSection ? `-${targetSection}` : ""}` : targetWing;
+              payload = { title, category, audience, targetWing, targetClass, targetSection, date: todayIso(), content };
+            }
             await apiRequest("/api/circulars", {
               method: "POST",
-              body: JSON.stringify({ title, category, audience, targetWing, targetClass, targetSection, date: todayIso(), content }),
+              body: JSON.stringify(payload),
             });
             await refreshDashboard();
-            showToast(`Circular published to ${audience}!`);
+            showToast(`Published to ${payload.recipientName || payload.audience}!`);
             render();
           },
         }, [
-          el("div", { className: "field" }, [el("label", { textContent: "Title" }), el("input", { className: "input", placeholder: "Notice or Holiday title", onInput: (e) => { title = e.target.value; } })]),
+          el("div", { className: "field" }, [el("label", { textContent: "Headline / Title" }), el("input", { className: "input", placeholder: "Newspaper or Notice title", onInput: (e) => { title = e.target.value; } })]),
           el("div", { className: "field" }, [
             el("label", { textContent: "Category" }),
             el("select", { className: "select", onChange: (e) => { category = e.target.value; } },
-              ["Notice", "Holiday", "Exam", "Event"].map((c) => el("option", { value: c, textContent: c }))
+              ["Newspaper", "Staff Notice", "Notice", "Holiday", "Exam", "Event"].map((c) => el("option", { value: c, textContent: c }))
             ),
           ]),
           el("div", { className: "field" }, [
-            el("label", { textContent: "Target Wing" }),
-            el("select", { className: "select", onChange: (e) => { targetWing = e.target.value; } }, [
-              el("option", { value: "All Wings", textContent: "All Wings" }),
-              ...WINGS.map((w) => el("option", { value: w.name, textContent: w.name })),
+            el("label", { textContent: "Target Audience" }),
+            el("select", {
+              className: "select",
+              onChange: (e) => {
+                targetMode = e.target.value;
+                wingField.style.display = targetMode === "SCHOOL" ? "" : "none";
+                classField.style.display = targetMode === "SCHOOL" ? "" : "none";
+                teacherField.style.display = targetMode === "SINGLE_TEACHER" ? "" : "none";
+              },
+            }, [
+              el("option", { value: "SCHOOL", textContent: "School / Wing / Class" }),
+              el("option", { value: "ALL_TEACHERS", textContent: "All Teachers (Staff Broadcast)" }),
+              el("option", { value: "SINGLE_TEACHER", textContent: "Individual Teacher (Direct)" }),
             ]),
           ]),
-          el("div", { className: "field" }, [
-            el("label", { textContent: "Target Class / Section (optional)" }),
-            el("div", { className: "btn-row" }, [
-              el("select", { className: "select", style: { flex: 1 }, onChange: (e) => { targetClass = e.target.value; } }, [
-                el("option", { value: "", textContent: "All Classes" }),
-                ...ALL_CLASSES.map((c) => el("option", { value: c, textContent: c })),
-              ]),
-              el("select", { className: "select", style: { width: "100px" }, onChange: (e) => { targetSection = e.target.value; } }, [
-                el("option", { value: "", textContent: "All Sec" }),
-                ...SECTIONS.map((s) => el("option", { value: s, textContent: `Sec ${s}` })),
-              ]),
-            ]),
-          ]),
-          el("div", { className: "field full" }, [el("label", { textContent: "Message" }), el("textarea", { className: "textarea", placeholder: "Write full circular content...", onInput: (e) => { content = e.target.value; } })]),
-          el("div", { className: "field full" }, [el("button", { type: "submit", className: "btn btn-primary", textContent: "Publish Circular" })]),
+          teacherField,
+          wingField,
+          classField,
+          el("div", { className: "field full" }, [el("label", { textContent: "Message" }), el("textarea", { className: "textarea", placeholder: "Write full newspaper / circular content...", onInput: (e) => { content = e.target.value; } })]),
+          el("div", { className: "field full" }, [el("button", { type: "submit", className: "btn btn-primary", textContent: "Publish Newspaper / Send Message" })]),
         ]),
       ]),
       el("section", { className: "card" }, [

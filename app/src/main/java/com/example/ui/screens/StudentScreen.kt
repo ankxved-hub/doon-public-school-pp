@@ -73,6 +73,8 @@ fun StudentScreen(
     onSelectAiPersona: (AiTutorPersona) -> Unit = {},
     onClearAiChat: () -> Unit = {},
     onGenerateCraftAiImage: (String, String, String, String) -> Unit = { _, _, _, _ -> },
+    onGenerateCustomAiImage: (String) -> Unit = {},
+    onEditCraftAiImage: (String, String) -> Unit = { _, _ -> },
     onClearCraftPreview: () -> Unit = {},
     onPublishCraftProject: (CraftProject) -> Unit = {},
     onGenerateCraftImageForPost: (CraftProject) -> Unit = {},
@@ -90,6 +92,8 @@ fun StudentScreen(
     val visibleCirculars = remember(circulars, student.id, student.className, student.section, student.wing) {
         circulars.filter { c ->
             when {
+                c.audience.equals("All Teachers", ignoreCase = true) ||
+                    c.audience.startsWith("Direct to Teacher", ignoreCase = true) -> false
                 c.recipientDocId.isNotBlank() -> c.recipientDocId == student.id
                 c.targetClass.isNotBlank() ->
                     c.targetClass == student.className &&
@@ -183,6 +187,8 @@ fun StudentScreen(
             craftAiImageState = craftAiImageState,
             generatingPostId = generatingCraftPostId,
             onGeneratePreviewImage = onGenerateCraftAiImage,
+            onGenerateCustomAiImage = onGenerateCustomAiImage,
+            onEditAiImage = onEditCraftAiImage,
             onClearPreviewImage = onClearCraftPreview,
             onPublishProject = onPublishCraftProject,
             onGenerateImageForPost = onGenerateCraftImageForPost,
