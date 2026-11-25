@@ -192,7 +192,85 @@ function clearNode(node) {
   }
 }
 
-// In-Memory State (JWT NEVER stored in localStorage / sessionStorage)
+const SAVED_ACCOUNTS_KEY = "dps_saved_accounts_v1";
+const ACTIVE_ACCOUNT_KEY = "dps_active_account_key_v1";
+
+function accountKeyFor(user) {
+  return `${String(user?.id || "")}::${String(user?.userId || "").toUpperCase()}::${String(user?.role || "").toUpperCase()}`;
+}
+
+function loadSavedAccounts() {
+  try {
+    const raw = window.localStorage.getItem(SAVED_ACCOUNTS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((a) => a && a.token && a.userId && a.role) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function writeSavedAccounts(list) {
+  try {
+    window.localStorage.setItem(SAVED_ACCOUNTS_KEY, JSON.stringify(list));
+  } catch (_) {
+    // Ignore storage quota errors
+  }
+}
+
+function saveAccountSession(user, token) {
+  if (!user || !token) return;
+  const key = accountKeyFor(user);
+  const classInfo = user.className ? `${user.className}-${user.section}` : (user.subject || user.wing || "");
+  const entry = {
+    key,
+    docId: user.id || "",
+    userId: user.userId || "",
+    fullName: user.fullName || user.userId || "User",
+    role: user.role || "STUDENT",
+    classInfo,
+    token,
+    savedAt: Date.now(),
+  };
+  const next = [entry, ...loadSavedAccounts().filter((a) => a.key !== key)].slice(0, 12);
+  writeSavedAccounts(next);
+  try {
+    window.localStorage.setItem(ACTIVE_ACCOUNT_KEY, key);
+  } catch (_) {}
+  state.savedAccounts = next;
+}
+
+function removeSavedAccountEntry(key) {
+  const next = loadSavedAccounts().filter((a) => a.key !== key);
+  writeSavedAccounts(next);
+  state.savedAccounts = next;
+  try {
+    if (window.localStorage.getItem(ACTIVE_ACCOUNT_KEY) === key) {
+      window.localStorage.removeItem(ACTIVE_ACCOUNT_KEY);
+    }
+  } catch (_) {}
+}
+
+async function switchToSavedAccount(acc) {
+  if (!acc || !acc.token) return;
+  state.token = acc.token;
+  state.activeTab = 0;
+  try {
+    await refreshDashboard();
+    if (state.dashboard?.currentUser) {
+      saveAccountSession(state.dashboard.currentUser, state.token);
+      showToast(`Switched to ${state.dashboard.currentUser.fullName} (${state.dashboard.currentUser.role.replace("_", " ")})`);
+    }
+    render();
+  } catch (err) {
+    removeSavedAccountEntry(acc.key);
+    state.token = null;
+    state.dashboard = null;
+    showToast(`Saved session expired for ${acc.fullName}. Please sign in again.`);
+    render();
+  }
+}
+
+// App State (multi-profile token persistence in localStorage for instant Switch Account)
 const state = {
   booting: true,
   needsAdminSetup: false,
@@ -201,10 +279,14 @@ const state = {
   selectedRole: "STUDENT",
   darkMode: false,
   token: null,
+  savedAccounts: loadSavedAccounts(),
   dashboard: null,
   activeTab: 0,
   teacherFilterClass: "",
   teacherFilterSection: "",
+  teacherTimetableDay: "mon",
+  libraryFilter: "ISSUED",
+  librarySearch: "",
   adminUserSearch: "",
   adminRoleFilter: "",
   feeSearch: "",
@@ -372,9 +454,11 @@ function renderLoginScreen(root) {
         ? "Enter Roll / Admission No (e.g. 001)"
         : state.selectedRole === "TEACHER"
           ? "Enter Teacher ID (e.g. TCH101)"
-          : state.selectedRole === "FEE_MANAGER"
-            ? "Enter Staff ID (e.g. FEE201)"
-            : "Enter Admin ID (e.g. ADMIN01)",
+          : state.selectedRole === "LIBRARIAN"
+            ? "Enter Librarian ID (e.g. LIB301)"
+            : state.selectedRole === "FEE_MANAGER"
+              ? "Enter Staff ID (e.g. FEE201)"
+              : "Enter Admin ID (e.g. ADMIN01)",
     onInput: (e) => { idVal = e.target.value; },
   });
   const pwInput = el("input", {
@@ -401,6 +485,7 @@ function renderLoginScreen(root) {
       state.token = res.token;
       state.activeTab = 0;
       await refreshDashboard();
+      saveAccountSession(state.dashboard?.currentUser || res.user, res.token);
       showToast(`Welcome, ${res.user.fullName}`);
       render();
     } catch (err) {
@@ -431,6 +516,7 @@ function renderLoginScreen(root) {
       state.needsAdminSetup = false;
       state.activeTab = 0;
       await refreshDashboard();
+      saveAccountSession(state.dashboard?.currentUser || res.user, res.token);
       showToast("Principal/Admin account activated on Cloudflare D1!");
       render();
     } catch (err) {
@@ -442,6 +528,7 @@ function renderLoginScreen(root) {
   const roles = [
     ["STUDENT", "Student"],
     ["TEACHER", "Teacher"],
+    ["LIBRARIAN", "Librarian"],
     ["FEE_MANAGER", "Accounts"],
     ["ADMIN", "Principal"],
   ];
@@ -727,6 +814,36 @@ function renderLoginScreen(root) {
         )
       ),
       buildAppUpdateCard(state.appUpdate),
+      state.savedAccounts.length > 0 && !state.needsAdminSetup && state.publicTab === "LOGIN"
+        ? el("section", { className: "card", style: { border: "1.5px solid var(--gold-amber)" } }, [
+            el("div", { className: "section-title" }, [
+              el("span", { textContent: `Saved Accounts (${state.savedAccounts.length}) — Switch Instantly` }),
+              el("span", { className: "pill pill-gold", textContent: "1-Tap Login" }),
+            ]),
+            el("div", { className: "item-list" },
+              state.savedAccounts.map((acc) =>
+                el("div", { className: "list-row" }, [
+                  el("div", {}, [
+                    el("strong", { textContent: acc.fullName }),
+                    el("div", { style: { fontSize: "0.8rem", color: "var(--text-muted)" }, textContent: `${acc.role.replace("_", " ")} • ${acc.userId}${acc.classInfo ? ` • ${acc.classInfo}` : ""}` }),
+                  ]),
+                  el("div", { className: "btn-row" }, [
+                    el("button", { type: "button", className: "btn btn-primary btn-sm", onClick: () => switchToSavedAccount(acc), textContent: "Switch" }),
+                    el("button", {
+                      type: "button",
+                      className: "btn btn-outline btn-sm",
+                      onClick: () => {
+                        removeSavedAccountEntry(acc.key);
+                        render();
+                      },
+                      textContent: "Remove",
+                    }),
+                  ]),
+                ])
+              )
+            ),
+          ])
+        : null,
       publicBodyCard,
       el("section", { className: "card card-navy" }, [
         el("div", { className: "eyebrow", style: { color: "var(--gold-amber)" }, textContent: "Official Academic Wings" }),
@@ -741,6 +858,148 @@ function renderLoginScreen(root) {
   ]);
 
   root.appendChild(wrapper);
+}
+
+// ==========================================
+// PROFILE DRAWER & INSTANT ACCOUNT SWITCHER
+// ==========================================
+function openAccountDrawerModal() {
+  const modalRoot = document.getElementById("modal-root");
+  clearNode(modalRoot);
+  const user = state.dashboard.currentUser;
+  const activeKey = accountKeyFor(user);
+  let showAddForm = false;
+  let addRole = "STUDENT";
+  let addUserId = "";
+  let addPassword = "";
+  let addError = "";
+
+  const draw = () => {
+    clearNode(modalRoot);
+    const saved = loadSavedAccounts();
+    state.savedAccounts = saved;
+    const backdrop = el("div", { className: "modal-backdrop", onClick: (e) => { if (e.target === backdrop) clearNode(modalRoot); } }, [
+      el("div", { className: "modal-card" }, [
+        el("div", { className: "section-title" }, [
+          el("div", {}, [
+            el("div", { textContent: showAddForm ? "Add Account" : "User Profile & Switch Account" }),
+            el("div", { style: { fontSize: "0.78rem", color: "var(--text-muted)", fontWeight: 500 }, textContent: `${user.fullName} • ${user.role.replace("_", " ")} (${user.userId})` }),
+          ]),
+          el("button", { type: "button", className: "btn btn-outline btn-sm", onClick: () => clearNode(modalRoot), textContent: "Close" }),
+        ]),
+        !showAddForm
+          ? el("div", { className: "item-list", style: { gap: "10px" } }, [
+              el("div", { className: "eyebrow", textContent: `Saved Profiles in This Session (${saved.length})` }),
+              ...saved.map((acc) => {
+                const isCurrent = acc.key === activeKey;
+                return el("div", {
+                  className: "list-row",
+                  style: isCurrent ? { border: "1.5px solid var(--gold-amber)", background: "var(--surface-alt)" } : {},
+                }, [
+                  el("div", {}, [
+                    el("strong", { textContent: acc.fullName }),
+                    el("div", { style: { fontSize: "0.78rem", color: "var(--text-muted)" }, textContent: `${acc.role.replace("_", " ")} • ${acc.userId}${acc.classInfo ? ` • ${acc.classInfo}` : ""}` }),
+                  ]),
+                  el("div", { className: "btn-row" }, [
+                    isCurrent
+                      ? el("span", { className: "pill pill-emerald", textContent: "ACTIVE" })
+                      : el("button", {
+                          type: "button",
+                          className: "btn btn-primary btn-sm",
+                          onClick: async () => {
+                            clearNode(modalRoot);
+                            await switchToSavedAccount(acc);
+                          },
+                          textContent: "Switch",
+                        }),
+                    !isCurrent
+                      ? el("button", {
+                          type: "button",
+                          className: "btn btn-outline btn-sm",
+                          onClick: () => {
+                            removeSavedAccountEntry(acc.key);
+                            draw();
+                          },
+                          textContent: "Remove",
+                        })
+                      : null,
+                  ]),
+                ]);
+              }),
+              el("div", { className: "btn-row", style: { marginTop: "6px", flexWrap: "wrap" } }, [
+                el("button", {
+                  type: "button",
+                  className: "btn btn-primary",
+                  style: { flex: 1 },
+                  onClick: () => {
+                    showAddForm = true;
+                    addError = "";
+                    draw();
+                  },
+                  textContent: "+ Add Account",
+                }),
+                el("button", {
+                  type: "button",
+                  className: "btn btn-outline",
+                  onClick: () => openProfileModal(),
+                  textContent: "Edit Profile / PW",
+                }),
+              ]),
+            ])
+          : el("form", {
+              className: "form-grid",
+              onSubmit: async (e) => {
+                e.preventDefault();
+                if (!addUserId.trim() || !addPassword.trim()) {
+                  addError = "Enter ID and password.";
+                  draw();
+                  return;
+                }
+                try {
+                  const res = await apiRequest("/api/auth/login", {
+                    method: "POST",
+                    body: JSON.stringify({ role: addRole, userId: addUserId.trim(), password: addPassword.trim() }),
+                  });
+                  state.token = res.token;
+                  state.activeTab = 0;
+                  await refreshDashboard();
+                  saveAccountSession(state.dashboard?.currentUser || res.user, res.token);
+                  clearNode(modalRoot);
+                  showToast(`Added & switched to ${res.user.fullName}`);
+                  render();
+                } catch (err) {
+                  addError = err.message;
+                  draw();
+                }
+              },
+            }, [
+              el("div", { className: "field full" }, [
+                el("label", { textContent: "Account Role" }),
+                el("select", { className: "select", onChange: (e) => { addRole = e.target.value; } },
+                  [["STUDENT", "Student"], ["TEACHER", "Teacher"], ["LIBRARIAN", "Librarian"], ["FEE_MANAGER", "Fee Manager"], ["ADMIN", "Principal / Admin"]].map(([k, l]) =>
+                    el("option", { value: k, selected: addRole === k, textContent: l })
+                  )
+                ),
+              ]),
+              el("div", { className: "field full" }, [
+                el("label", { textContent: "User / Roll / Staff ID" }),
+                el("input", { className: "input", value: addUserId, placeholder: "e.g. 001 / TCH101 / LIB301", onInput: (e) => { addUserId = e.target.value; } }),
+              ]),
+              el("div", { className: "field full" }, [
+                el("label", { textContent: "Password" }),
+                el("input", { className: "input", type: "password", value: addPassword, placeholder: "Enter password", onInput: (e) => { addPassword = e.target.value; } }),
+              ]),
+              addError ? el("div", { className: "field full alert alert-error", textContent: addError }) : null,
+              el("div", { className: "field full btn-row" }, [
+                el("button", { type: "button", className: "btn btn-outline", onClick: () => { showAddForm = false; draw(); }, textContent: "Back" }),
+                el("button", { type: "submit", className: "btn btn-primary", style: { flex: 1 }, textContent: "Sign In & Save Account" }),
+              ]),
+            ]),
+      ]),
+    ]);
+    modalRoot.appendChild(backdrop);
+  };
+  draw();
 }
 
 // ==========================================
@@ -942,28 +1201,437 @@ function buildTimetableTable(className, section) {
   const timetables = state.dashboard.timetables || [];
   const matched = timetables.find((t) => pick(t, "className", "class_name") === className && t.section === section);
   const slots = matched ? safeParseJson(pick(matched, "slotsJson", "slots_json", matched.slots), []) : defaultTimetableSlots(className, section);
+  const hasSun = slots.some((s) => String(s.sun || "").trim().length > 0);
+  const cols = hasSun ? ["Period", "Time", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] : ["Period", "Time", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
   return el("div", { className: "table-wrap" }, [
     el("table", {}, [
       el("thead", {}, [
-        el("tr", {}, ["Period", "Time", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((h) => el("th", { textContent: h }))),
+        el("tr", {}, cols.map((h) => el("th", { textContent: h }))),
       ]),
       el("tbody", {},
         slots.map((s) =>
           el("tr", {}, [
             el("td", { style: { fontWeight: 700 }, textContent: s.period }),
             el("td", { style: { whiteSpace: "nowrap" }, textContent: s.time }),
-            el("td", { textContent: s.mon }),
-            el("td", { textContent: s.tue }),
-            el("td", { textContent: s.wed }),
-            el("td", { textContent: s.thu }),
-            el("td", { textContent: s.fri }),
-            el("td", { textContent: s.sat }),
+            el("td", { textContent: s.mon || "—" }),
+            el("td", { textContent: s.tue || "—" }),
+            el("td", { textContent: s.wed || "—" }),
+            el("td", { textContent: s.thu || "—" }),
+            el("td", { textContent: s.fri || "—" }),
+            el("td", { textContent: s.sat || "—" }),
+            hasSun ? el("td", { textContent: s.sun || "—" }) : null,
           ])
         )
       ),
     ]),
   ]);
+}
+
+function buildEditableTimetableSection(className, section) {
+  const timetables = state.dashboard.timetables || [];
+  const matched = timetables.find((t) => pick(t, "className", "class_name") === className && t.section === section);
+  const loaded = matched ? safeParseJson(pick(matched, "slotsJson", "slots_json", matched.slots), []) : defaultTimetableSlots(className, section);
+  const draft = loaded.map((s) => ({
+    period: s.period || "",
+    time: s.time || "",
+    mon: s.mon || "",
+    tue: s.tue || "",
+    wed: s.wed || "",
+    thu: s.thu || "",
+    fri: s.fri || "",
+    sat: s.sat || "",
+    sun: s.sun || "",
+  }));
+
+  const dayList = [
+    ["mon", "Mon"],
+    ["tue", "Tue"],
+    ["wed", "Wed"],
+    ["thu", "Thu"],
+    ["fri", "Fri"],
+    ["sat", "Sat"],
+    ["sun", "Sun"],
+  ];
+  const activeDay = state.teacherTimetableDay || "mon";
+
+  return el("section", { className: "card" }, [
+    el("div", { className: "section-title" }, [
+      el("span", { textContent: `Editable Fixed Weekly Timetable (${className}-${section})` }),
+      el("span", { className: "pill pill-emerald", textContent: "Repeats Weekly All Year" }),
+    ]),
+    el("p", {
+      style: { margin: "0 0 10px", fontSize: "0.84rem", color: "var(--text-muted)" },
+      textContent: "Each day (Mon–Sun) has its own independent subjects. Leave off days blank — this fixed timetable does not reset across weeks or years.",
+    }),
+    el("div", { className: "btn-row", style: { flexWrap: "wrap", marginBottom: "12px" } },
+      dayList.map(([dk, dl]) =>
+        el("button", {
+          type: "button",
+          className: `btn btn-sm ${activeDay === dk ? "btn-primary" : "btn-outline"}`,
+          onClick: () => {
+            state.teacherTimetableDay = dk;
+            render();
+          },
+          textContent: `${dl} (${draft.filter((s) => String(s[dk] || "").trim()).length})`,
+        })
+      )
+    ),
+    el("div", { className: "item-list" },
+      draft.map((slot, idx) =>
+        el("div", { className: "form-grid", style: { padding: "8px", border: "1px solid var(--border)", borderRadius: "10px", background: "var(--surface-alt)" } }, [
+          el("div", { className: "field" }, [
+            el("label", { textContent: `Period #${idx + 1}` }),
+            el("input", { className: "input", value: slot.period, onInput: (e) => { draft[idx].period = e.target.value; } }),
+          ]),
+          el("div", { className: "field" }, [
+            el("label", { textContent: "Time" }),
+            el("input", { className: "input", value: slot.time, onInput: (e) => { draft[idx].time = e.target.value; } }),
+          ]),
+          el("div", { className: "field full" }, [
+            el("label", { textContent: `${activeDay.toUpperCase()} Subject (leave blank if free/off)` }),
+            el("input", { className: "input", value: slot[activeDay] || "", placeholder: "e.g. Mathematics, Science...", onInput: (e) => { draft[idx][activeDay] = e.target.value; } }),
+          ]),
+        ])
+      )
+    ),
+    el("div", { className: "btn-row", style: { marginTop: "12px", flexWrap: "wrap" } }, [
+      el("button", {
+        type: "button",
+        className: "btn btn-outline btn-sm",
+        onClick: async () => {
+          draft.forEach((s) => { s[activeDay] = ""; });
+          await apiRequest("/api/timetables", { method: "POST", body: JSON.stringify({ className, section, slots: draft }) });
+          await refreshDashboard();
+          showToast(`Cleared ${activeDay.toUpperCase()} (marked as Off Day).`);
+          render();
+        },
+        textContent: `Clear ${activeDay.toUpperCase()}`,
+      }),
+      el("button", {
+        type: "button",
+        className: "btn btn-primary",
+        style: { flex: 1 },
+        onClick: async () => {
+          await apiRequest("/api/timetables", { method: "POST", body: JSON.stringify({ className, section, slots: draft }) });
+          await refreshDashboard();
+          showToast(`Fixed weekly timetable saved for ${className}-${section}!`);
+          render();
+        },
+        textContent: `Save Fixed Weekly Timetable (${className}-${section})`,
+      }),
+    ]),
+  ]);
+}
+
+function buildStaffLeaveSection(staffUser, leaves) {
+  const myLeaves = (leaves || []).filter((l) => pick(l, "studentDocId", "student_doc_id") === staffUser.id);
+  let fromDate = todayIso();
+  let toDate = todayIso();
+  let reason = "";
+
+  return el("section", { className: "card" }, [
+    el("div", { className: "section-title" }, [
+      el("span", { textContent: "Apply for Staff Leave (Sent to Principal / Admin)" }),
+      el("span", { className: "pill pill-navy", textContent: staffUser.role.replace("_", " ") }),
+    ]),
+    el("form", {
+      className: "form-grid",
+      onSubmit: async (e) => {
+        e.preventDefault();
+        if (!reason.trim()) {
+          showToast("Enter a reason for leave.");
+          return;
+        }
+        try {
+          await apiRequest("/api/leaves", {
+            method: "POST",
+            body: JSON.stringify({ fromDate, toDate, reason }),
+          });
+          await refreshDashboard();
+          showToast("Staff leave application sent to Principal / Admin!");
+          render();
+        } catch (err) {
+          showToast(err.message);
+        }
+      },
+    }, [
+      el("div", { className: "field" }, [el("label", { textContent: "From Date" }), el("input", { className: "input", type: "date", value: fromDate, onInput: (e) => { fromDate = e.target.value; } })]),
+      el("div", { className: "field" }, [el("label", { textContent: "To Date" }), el("input", { className: "input", type: "date", value: toDate, onInput: (e) => { toDate = e.target.value; } })]),
+      el("div", { className: "field full" }, [el("label", { textContent: "Reason for Leave" }), el("input", { className: "input", placeholder: "Medical / Family / Urgent work", onInput: (e) => { reason = e.target.value; } })]),
+      el("div", { className: "field full" }, [el("button", { type: "submit", className: "btn btn-primary", textContent: "Send Leave Application to Principal / Admin" })]),
+    ]),
+    myLeaves.length > 0
+      ? el("div", { className: "item-list", style: { marginTop: "12px" } },
+          myLeaves.map((l) =>
+            el("div", { className: "list-row" }, [
+              el("div", {}, [
+                el("strong", { textContent: `${pick(l, "fromDate", "from_date")} → ${pick(l, "toDate", "to_date")}` }),
+                el("div", { style: { fontSize: "0.84rem", color: "var(--text-muted)" }, textContent: l.reason }),
+                pick(l, "teacherRemark", "teacher_remark")
+                  ? el("div", { style: { fontSize: "0.8rem", color: "var(--emerald)" }, textContent: `Admin Remark: ${pick(l, "teacherRemark", "teacher_remark")}` })
+                  : null,
+              ]),
+              el("span", { className: `pill ${l.status === "Approved" ? "pill-emerald" : l.status === "Rejected" ? "pill-rose" : "pill-gold"}`, textContent: l.status }),
+            ])
+          )
+        )
+      : null,
+  ]);
+}
+
+function buildAdminStaffLeaveApprovalsSection(leaves) {
+  const staffLeaves = (leaves || []).filter((l) => {
+    const tr = String(pick(l, "targetRole", "target_role", "")).toUpperCase();
+    const ar = String(pick(l, "applicantRole", "applicant_role", "")).toUpperCase();
+    return tr === "ADMIN" || (ar && ar !== "STUDENT");
+  });
+
+  return el("section", { className: "card" }, [
+    el("div", { className: "section-title" }, [
+      el("span", { textContent: `Staff Leave Approvals — Teachers, Fee Managers & Librarians (${staffLeaves.length})` }),
+      el("span", { className: "pill pill-gold", textContent: `${staffLeaves.filter((l) => l.status === "Pending").length} Pending` }),
+    ]),
+    el("div", { className: "item-list" },
+      staffLeaves.length === 0
+        ? [el("p", { style: { color: "var(--text-muted)" }, textContent: "No staff leave applications right now." })]
+        : staffLeaves.map((l) =>
+            el("div", { className: "list-row" }, [
+              el("div", {}, [
+                el("strong", { textContent: `${pick(l, "studentName", "student_name")} • ${String(pick(l, "applicantRole", "applicant_role", "STAFF")).replace("_", " ")} (${pick(l, "admissionNo", "admission_no")})` }),
+                el("div", { style: { fontSize: "0.84rem" }, textContent: `${pick(l, "fromDate", "from_date")} → ${pick(l, "toDate", "to_date")} • ${l.reason}` }),
+              ]),
+              el("div", { className: "btn-row" }, [
+                el("span", { className: `pill ${l.status === "Approved" ? "pill-emerald" : l.status === "Rejected" ? "pill-rose" : "pill-gold"}`, textContent: l.status }),
+                l.status === "Pending"
+                  ? el("button", {
+                      type: "button",
+                      className: "btn btn-emerald btn-sm",
+                      onClick: async () => {
+                        await apiRequest(`/api/leaves/${encodeURIComponent(l.id)}`, { method: "PUT", body: JSON.stringify({ status: "Approved", remark: "Approved by Principal" }) });
+                        await refreshDashboard();
+                        showToast("Staff leave approved.");
+                        render();
+                      },
+                      textContent: "Approve",
+                    })
+                  : null,
+                l.status === "Pending"
+                  ? el("button", {
+                      type: "button",
+                      className: "btn btn-rose btn-sm",
+                      onClick: async () => {
+                        await apiRequest(`/api/leaves/${encodeURIComponent(l.id)}`, { method: "PUT", body: JSON.stringify({ status: "Rejected", remark: "Rejected by Principal" }) });
+                        await refreshDashboard();
+                        showToast("Staff leave rejected.");
+                        render();
+                      },
+                      textContent: "Reject",
+                    })
+                  : null,
+              ]),
+            ])
+          )
+    ),
+  ]);
+}
+
+function buildLibraryDeskSection(operatorUser, allUsers, libraryIssues) {
+  const issues = libraryIssues || [];
+  const today = todayIso();
+  const notReturned = issues.filter((i) => String(i.status || "").toUpperCase() !== "RETURNED");
+  const overdue = notReturned.filter((i) => {
+    const due = pick(i, "dueDate", "due_date", "");
+    return due && due < today;
+  });
+
+  let borrowerDocId = "";
+  let borrowerName = "";
+  let borrowerId = "";
+  let borrowerRole = "STUDENT";
+  let borrowerClass = "";
+  let bookTitle = "";
+  let bookCode = "";
+  let dueDate = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  let notes = "";
+
+  const nameInput = el("input", { className: "input", placeholder: "Borrower Full Name", onInput: (e) => { borrowerName = e.target.value; } });
+  const idInput = el("input", { className: "input", placeholder: "Roll No / Staff ID", onInput: (e) => { borrowerId = e.target.value; } });
+  const roleSelect = el("select", { className: "select", onChange: (e) => { borrowerRole = e.target.value; } },
+    ["STUDENT", "TEACHER", "FEE_MANAGER", "LIBRARIAN", "ADMIN"].map((r) => el("option", { value: r, textContent: r.replace("_", " ") }))
+  );
+
+  const filtered = issues.filter((i) => {
+    const st = String(i.status || "ISSUED").toUpperCase();
+    const due = pick(i, "dueDate", "due_date", "");
+    if (state.libraryFilter === "ISSUED" && st === "RETURNED") return false;
+    if (state.libraryFilter === "OVERDUE" && !(st !== "RETURNED" && due && due < today)) return false;
+    if (state.libraryFilter === "RETURNED" && st !== "RETURNED") return false;
+    const q = state.librarySearch.trim().toLowerCase();
+    if (!q) return true;
+    return [
+      pick(i, "bookTitle", "book_title"),
+      pick(i, "bookCode", "book_code"),
+      pick(i, "borrowerName", "borrower_name"),
+      pick(i, "borrowerId", "borrower_id"),
+    ].some((v) => String(v || "").toLowerCase().includes(q));
+  });
+
+  return el("div", { className: "item-list", style: { gap: "16px" } }, [
+    el("div", { className: "stats-grid" }, [
+      el("div", { className: "stat-card" }, [el("div", { className: "stat-lbl", textContent: "Not Returned" }), el("div", { className: "stat-val", textContent: String(notReturned.length) })]),
+      el("div", { className: "stat-card" }, [el("div", { className: "stat-lbl", textContent: "Overdue Books" }), el("div", { className: "stat-val", style: { color: "var(--rose)" }, textContent: String(overdue.length) })]),
+      el("div", { className: "stat-card" }, [el("div", { className: "stat-lbl", textContent: "Total Returned" }), el("div", { className: "stat-val", style: { color: "var(--emerald)" }, textContent: String(issues.length - notReturned.length) })]),
+    ]),
+    el("section", { className: "card" }, [
+      el("h3", { className: "section-title", textContent: "Issue Book to Anyone (Student, Teacher, Staff)" }),
+      el("form", {
+        className: "form-grid",
+        onSubmit: async (e) => {
+          e.preventDefault();
+          if (!borrowerName.trim() || !bookTitle.trim()) {
+            showToast("Enter borrower name and book title.");
+            return;
+          }
+          try {
+            await apiRequest("/api/library/issue", {
+              method: "POST",
+              body: JSON.stringify({
+                bookTitle: bookTitle.trim(),
+                bookCode: bookCode.trim(),
+                borrowerDocId,
+                borrowerId: borrowerId.trim(),
+                borrowerName: borrowerName.trim(),
+                borrowerRole,
+                borrowerClass,
+                issueDate: today,
+                dueDate,
+                notes: notes.trim(),
+              }),
+            });
+            await refreshDashboard();
+            showToast(`Book '${bookTitle.trim()}' issued to ${borrowerName.trim()}!`);
+            render();
+          } catch (err) {
+            showToast(err.message);
+          }
+        },
+      }, [
+        el("div", { className: "field full" }, [
+          el("label", { textContent: "Quick-Pick Borrower from School Directory (or type manually below)" }),
+          el("select", {
+            className: "select",
+            onChange: (e) => {
+              const picked = (allUsers || []).find((u) => u.id === e.target.value);
+              if (picked) {
+                borrowerDocId = picked.id;
+                borrowerName = picked.fullName;
+                borrowerId = picked.userId;
+                borrowerRole = picked.role;
+                borrowerClass = picked.className ? `${picked.className}-${picked.section}` : (picked.wing || "");
+                nameInput.value = borrowerName;
+                idInput.value = borrowerId;
+                roleSelect.value = borrowerRole;
+              }
+            },
+          }, [
+            el("option", { value: "", textContent: "-- Select Student / Teacher / Staff --" }),
+            ...(allUsers || []).map((u) =>
+              el("option", { value: u.id, textContent: `${u.fullName} (${u.userId} • ${u.role.replace("_", " ")}${u.className ? ` • ${u.className}-${u.section}` : ""})` })
+            ),
+          ]),
+        ]),
+        el("div", { className: "field" }, [el("label", { textContent: "Borrower Name" }), nameInput]),
+        el("div", { className: "field" }, [el("label", { textContent: "Roll / Staff ID" }), idInput]),
+        el("div", { className: "field" }, [el("label", { textContent: "Borrower Role" }), roleSelect]),
+        el("div", { className: "field" }, [el("label", { textContent: "Book Title" }), el("input", { className: "input", placeholder: "e.g. NCERT Physics Vol. 1", onInput: (e) => { bookTitle = e.target.value; } })]),
+        el("div", { className: "field" }, [el("label", { textContent: "Book Code / Barcode" }), el("input", { className: "input", placeholder: "e.g. LIB-1042", onInput: (e) => { bookCode = e.target.value; } })]),
+        el("div", { className: "field" }, [el("label", { textContent: "Return Due Date" }), el("input", { className: "input", type: "date", value: dueDate, onInput: (e) => { dueDate = e.target.value; } })]),
+        el("div", { className: "field full" }, [el("label", { textContent: "Remarks (Optional)" }), el("input", { className: "input", placeholder: "Condition / notes...", onInput: (e) => { notes = e.target.value; } })]),
+        el("div", { className: "field full" }, [el("button", { type: "submit", className: "btn btn-primary", textContent: "Issue Library Book" })]),
+      ]),
+    ]),
+    el("section", { className: "card" }, [
+      el("div", { className: "section-title" }, [
+        el("span", { textContent: `Library Register (${filtered.length})` }),
+        el("div", { className: "btn-row", style: { flexWrap: "wrap" } },
+          [["ISSUED", "Not Returned"], ["OVERDUE", "Overdue"], ["RETURNED", "Returned"], ["ALL", "All"]].map(([fk, fl]) =>
+            el("button", {
+              type: "button",
+              className: `btn btn-sm ${state.libraryFilter === fk ? "btn-primary" : "btn-outline"}`,
+              onClick: () => {
+                state.libraryFilter = fk;
+                render();
+              },
+              textContent: fl,
+            })
+          )
+        ),
+      ]),
+      el("input", {
+        className: "input",
+        style: { marginBottom: "12px" },
+        value: state.librarySearch,
+        placeholder: "Search by book title, code, borrower name or ID...",
+        onInput: (e) => {
+          state.librarySearch = e.target.value;
+          render();
+        },
+      }),
+      el("div", { className: "item-list" },
+        filtered.length === 0
+          ? [el("p", { style: { color: "var(--text-muted)" }, textContent: "No matching library issue records." })]
+          : filtered.map((rec) => {
+              const isReturned = String(rec.status || "").toUpperCase() === "RETURNED";
+              const due = pick(rec, "dueDate", "due_date", "");
+              const isOverdue = !isReturned && due && due < today;
+              return el("div", { className: "list-row" }, [
+                el("div", {}, [
+                  el("strong", { textContent: `${pick(rec, "bookTitle", "book_title")}${pick(rec, "bookCode", "book_code") ? ` (${pick(rec, "bookCode", "book_code")})` : ""}` }),
+                  el("div", { style: { fontSize: "0.84rem" }, textContent: `Borrower: ${pick(rec, "borrowerName", "borrower_name")} • ${String(pick(rec, "borrowerRole", "borrower_role", "")).replace("_", " ")} (${pick(rec, "borrowerId", "borrower_id")})` }),
+                  el("div", { style: { fontSize: "0.78rem", color: isOverdue ? "var(--rose)" : "var(--text-muted)" }, textContent: `Issued: ${pick(rec, "issueDate", "issue_date")} • Due: ${due}${isReturned ? ` • Returned: ${pick(rec, "returnedDate", "returned_date")}` : ""}` }),
+                ]),
+                el("div", { className: "btn-row" }, [
+                  el("span", { className: `pill ${isReturned ? "pill-emerald" : isOverdue ? "pill-rose" : "pill-gold"}`, textContent: isReturned ? "RETURNED" : isOverdue ? "OVERDUE" : "NOT RETURNED" }),
+                  !isReturned
+                    ? el("button", {
+                        type: "button",
+                        className: "btn btn-emerald btn-sm",
+                        onClick: async () => {
+                          await apiRequest(`/api/library/${encodeURIComponent(rec.id)}/return`, { method: "PUT", body: JSON.stringify({}) });
+                          await refreshDashboard();
+                          showToast("Book marked as returned!");
+                          render();
+                        },
+                        textContent: "Mark Returned",
+                      })
+                    : null,
+                  el("button", {
+                    type: "button",
+                    className: "btn btn-rose btn-sm",
+                    onClick: async () => {
+                      await apiRequest(`/api/library/${encodeURIComponent(rec.id)}`, { method: "DELETE" });
+                      await refreshDashboard();
+                      showToast("Library record deleted.");
+                      render();
+                    },
+                    textContent: "Delete",
+                  }),
+                ]),
+              ]);
+            })
+      ),
+    ]),
+  ]);
+}
+
+function renderLibrarianPortal(tabIdx) {
+  const d = state.dashboard;
+  const librarian = d.currentUser;
+  if (tabIdx === 0) {
+    return buildLibraryDeskSection(librarian, d.users || [], d.libraryIssues || []);
+  }
+  return buildStaffLeaveSection(librarian, d.leaves || []);
 }
 
 // ==========================================
@@ -1648,21 +2316,22 @@ function renderTeacherPortal(tabIdx) {
                     studentDocId: st.id,
                     status: statusMap[st.id] || "Present",
                   }));
+                  const absentCount = records.filter((r) => r.status === "Absent").length;
                   await apiRequest("/api/attendance", { method: "POST", body: JSON.stringify({ records }) });
                   await refreshDashboard();
-                  showToast("Attendance saved!");
+                  showToast(absentCount > 0 ? `Attendance saved & ${absentCount} Parent Absence Notice(s) sent automatically!` : "Attendance saved!");
                   render();
                 },
-                textContent: "Save Class Attendance",
+                textContent: "Save Class Attendance (Auto-Notices Parents if Absent)",
               }),
             ]),
       ]),
       el("section", { className: "card" }, [
-        el("h3", { className: "section-title", textContent: `Leave Requests (${leaves.length})` }),
+        el("h3", { className: "section-title", textContent: `Student Leave Requests (${leaves.filter((l) => String(pick(l, "targetRole", "target_role", "TEACHER")).toUpperCase() === "TEACHER").length})` }),
         el("div", { className: "item-list" },
-          leaves.length === 0
-            ? [el("p", { style: { color: "var(--text-muted)" }, textContent: "No leave requests for this class." })]
-            : leaves.map((l) =>
+          leaves.filter((l) => String(pick(l, "targetRole", "target_role", "TEACHER")).toUpperCase() === "TEACHER").length === 0
+            ? [el("p", { style: { color: "var(--text-muted)" }, textContent: "No student leave requests for this class." })]
+            : leaves.filter((l) => String(pick(l, "targetRole", "target_role", "TEACHER")).toUpperCase() === "TEACHER").map((l) =>
                 el("div", { className: "list-row" }, [
                   el("div", {}, [
                     el("strong", { textContent: `${pick(l, "studentName", "student_name")} (${pick(l, "fromDate", "from_date")} → ${pick(l, "toDate", "to_date")})` }),
@@ -1701,6 +2370,7 @@ function renderTeacherPortal(tabIdx) {
               )
         ),
       ]),
+      buildStaffLeaveSection(teacher, leaves),
     ]);
   }
 
@@ -1963,11 +2633,12 @@ function renderTeacherPortal(tabIdx) {
               )
         ),
       ]),
-      el("section", { className: "card" }, [
-        el("h3", { className: "section-title", textContent: `Current Timetable (${cls}-${sec})` }),
-        buildTimetableTable(cls, sec),
-      ]),
+      buildEditableTimetableSection(cls, sec),
     ]);
+  }
+
+  if (tabIdx === 5) {
+    return buildLibraryDeskSection(teacher, d.users || [], d.libraryIssues || []);
   }
 
   return buildCraftStudioSection(teacher);
@@ -2414,20 +3085,24 @@ function renderFeeManagerPortal(tabIdx) {
     ]);
   }
 
-  return el("section", { className: "card" }, [
-    el("h3", { className: "section-title", textContent: `All Payment Transactions (${payments.length})` }),
-    el("div", { className: "item-list" },
-      payments.map((p) =>
-        el("div", { className: "list-row" }, [
-          el("div", {}, [
-            el("strong", { textContent: `${pick(p, "studentName", "student_name")} — ₹${p.amount}` }),
-            el("div", { style: { fontSize: "0.82rem", color: "var(--text-muted)" }, textContent: `UTR: ${pick(p, "utrOrRef", "utr_or_ref")} • Receipt: ${pick(p, "receiptNo", "receipt_no") || "Pending"}` }),
-          ]),
-          el("span", { className: `pill ${p.status === "VERIFIED" ? "pill-emerald" : p.status === "REJECTED" ? "pill-rose" : "pill-gold"}`, textContent: p.status }),
-        ])
-      )
-    ),
-  ]);
+  if (tabIdx === 3) {
+    return el("section", { className: "card" }, [
+      el("h3", { className: "section-title", textContent: `All Payment Transactions (${payments.length})` }),
+      el("div", { className: "item-list" },
+        payments.map((p) =>
+          el("div", { className: "list-row" }, [
+            el("div", {}, [
+              el("strong", { textContent: `${pick(p, "studentName", "student_name")} — ₹${p.amount}` }),
+              el("div", { style: { fontSize: "0.82rem", color: "var(--text-muted)" }, textContent: `UTR: ${pick(p, "utrOrRef", "utr_or_ref")} • Receipt: ${pick(p, "receiptNo", "receipt_no") || "Pending"}` }),
+            ]),
+            el("span", { className: `pill ${p.status === "VERIFIED" ? "pill-emerald" : p.status === "REJECTED" ? "pill-rose" : "pill-gold"}`, textContent: p.status }),
+          ])
+        )
+      ),
+    ]);
+  }
+
+  return buildStaffLeaveSection(d.currentUser, d.leaves || []);
 }
 
 // ==========================================
@@ -2459,9 +3134,10 @@ function renderAdminPortal(tabIdx) {
       el("div", { className: "stats-grid" }, [
         el("div", { className: "stat-card" }, [el("div", { className: "stat-lbl", textContent: "Enrolled Students" }), el("div", { className: "stat-val", textContent: String(stats.totalStudents ?? 0) })]),
         el("div", { className: "stat-card" }, [el("div", { className: "stat-lbl", textContent: "Active Teachers" }), el("div", { className: "stat-val", textContent: String(stats.totalTeachers ?? 0) })]),
-        el("div", { className: "stat-card" }, [el("div", { className: "stat-lbl", textContent: "Fee Managers" }), el("div", { className: "stat-val", textContent: String(stats.totalFeeManagers ?? 0) })]),
+        el("div", { className: "stat-card" }, [el("div", { className: "stat-lbl", textContent: "Fee Mgrs / Librarians" }), el("div", { className: "stat-val", textContent: `${stats.totalFeeManagers ?? 0} / ${stats.totalLibrarians ?? 0}` })]),
         el("div", { className: "stat-card" }, [el("div", { className: "stat-lbl", textContent: "Circulars Published" }), el("div", { className: "stat-val", textContent: String(circulars.length) })]),
       ]),
+      buildAdminStaffLeaveApprovalsSection(d.leaves || []),
       el("section", { className: "card" }, [
         el("h3", { className: "section-title", textContent: "Publish In-App Android Update (Play Store or Direct APK)" }),
         el("p", {
@@ -2646,12 +3322,12 @@ function renderAdminPortal(tabIdx) {
     const roleSelect = el(
       "select",
       { className: "select" },
-      ["STUDENT", "TEACHER", "FEE_MANAGER", "ADMIN"].map((r) =>
+      ["STUDENT", "TEACHER", "LIBRARIAN", "FEE_MANAGER", "ADMIN"].map((r) =>
         el("option", { value: r, textContent: r.replace("_", " ") })
       )
     );
     const fullNameInput = el("input", { className: "input", placeholder: "Full Name", onInput: (e) => { newFullName = e.target.value; } });
-    const userIdInput = el("input", { className: "input", placeholder: "e.g. TCH101 / FEE201 or leave blank", onInput: (e) => { newUserId = e.target.value; } });
+    const userIdInput = el("input", { className: "input", placeholder: "e.g. TCH101 / LIB301 / FEE201", onInput: (e) => { newUserId = e.target.value; } });
     const passwordInput = el("input", { className: "input", type: "password", placeholder: "Min 4 chars (blank on edit keeps existing)", onInput: (e) => { newPassword = e.target.value; } });
     const classSelect = el("select", { className: "select", onChange: (e) => { newClass = e.target.value; } },
       ALL_CLASSES.map((c) => el("option", { value: c, textContent: c }))
@@ -2665,6 +3341,13 @@ function renderAdminPortal(tabIdx) {
     const transportInput = el("input", { className: "input", style: { flex: 1 }, type: "number", value: newTransport, onInput: (e) => { newTransport = e.target.value; } });
     const submitBtn = el("button", { type: "submit", className: "btn btn-primary", textContent: "Create Account in Cloud" });
 
+    const librarianCheckbox = el("input", {
+      type: "checkbox",
+      onChange: (e) => {
+        if (e.target.checked) extraRolesSet.add("LIBRARIAN");
+        else extraRolesSet.delete("LIBRARIAN");
+      },
+    });
     const feeMgrCheckbox = el("input", {
       type: "checkbox",
       onChange: (e) => {
@@ -2684,6 +3367,10 @@ function renderAdminPortal(tabIdx) {
       el("label", { textContent: "Teacher Multi-Role Access (Select Extra Roles if needed)" }),
       el("div", { className: "btn-row", style: { flexWrap: "wrap", gap: "10px", padding: "10px", border: "1px solid var(--border)", borderRadius: "10px", background: "var(--surface-alt)" } }, [
         el("span", { className: "pill pill-navy", textContent: "Teacher (Primary)" }),
+        el("label", { style: { display: "inline-flex", alignItems: "center", gap: "6px", cursor: "pointer", fontWeight: 600, fontSize: "0.88rem" } }, [
+          librarianCheckbox,
+          "Librarian",
+        ]),
         el("label", { style: { display: "inline-flex", alignItems: "center", gap: "6px", cursor: "pointer", fontWeight: 600, fontSize: "0.88rem" } }, [
           feeMgrCheckbox,
           "Fee Manager (Accounts)",
@@ -2759,6 +3446,7 @@ function renderAdminPortal(tabIdx) {
       newRole = "STUDENT";
       roleSelect.value = "STUDENT";
       extraRolesSet.clear();
+      librarianCheckbox.checked = false;
       feeMgrCheckbox.checked = false;
       adminCheckbox.checked = false;
       newFullName = "";
@@ -2783,6 +3471,7 @@ function renderAdminPortal(tabIdx) {
       newRole = e.target.value;
       if (newRole !== "TEACHER") {
         extraRolesSet.clear();
+        librarianCheckbox.checked = false;
         feeMgrCheckbox.checked = false;
         adminCheckbox.checked = false;
       }
@@ -2814,7 +3503,11 @@ function renderAdminPortal(tabIdx) {
                 userId: newUserId.trim(),
                 phone: newPhone,
                 password: newPassword,
-                wing: newRole === "STUDENT" || newRole === "TEACHER" ? wingForClass(newClass) : "All Wings",
+                wing: newRole === "STUDENT" || newRole === "TEACHER"
+                  ? wingForClass(newClass)
+                  : newRole === "LIBRARIAN"
+                    ? "School Library"
+                    : "All Wings",
                 className: newRole === "STUDENT" || newRole === "TEACHER" ? newClass : "",
                 section: newRole === "STUDENT" || newRole === "TEACHER" ? newSection : "",
                 subject: newRole === "TEACHER" ? uniqueSubjects : "",
@@ -2856,7 +3549,7 @@ function renderAdminPortal(tabIdx) {
           el("input", { className: "input", style: { flex: 1 }, value: searchVal, placeholder: "Search name, roll no, class...", onInput: (e) => { searchVal = e.target.value; } }),
           el("select", { className: "select", style: { width: "auto" }, onChange: (e) => { roleVal = e.target.value; } }, [
             el("option", { value: "", selected: roleVal === "", textContent: "All Roles" }),
-            ...["STUDENT", "TEACHER", "FEE_MANAGER", "ADMIN"].map((r) => el("option", { value: r, selected: roleVal === r, textContent: r })),
+            ...["STUDENT", "TEACHER", "LIBRARIAN", "FEE_MANAGER", "ADMIN"].map((r) => el("option", { value: r, selected: roleVal === r, textContent: r })),
           ]),
           el("button", {
             type: "button",
@@ -2889,6 +3582,7 @@ function renderAdminPortal(tabIdx) {
                     roleSelect.value = newRole;
                     extraRolesSet.clear();
                     for (const er of u.extraRoles || []) extraRolesSet.add(er);
+                    librarianCheckbox.checked = extraRolesSet.has("LIBRARIAN");
                     feeMgrCheckbox.checked = extraRolesSet.has("FEE_MANAGER");
                     adminCheckbox.checked = extraRolesSet.has("ADMIN");
                     newFullName = u.fullName || "";
@@ -3109,6 +3803,10 @@ function renderAdminPortal(tabIdx) {
     ]);
   }
 
+  if (tabIdx === 4) {
+    return buildLibraryDeskSection(admin, users, d.libraryIssues || []);
+  }
+
   return buildCraftStudioSection(admin);
 }
 
@@ -3119,12 +3817,14 @@ function renderAuthenticatedShell(root) {
   const user = state.dashboard.currentUser;
   const tabDefs =
     user.role === "ADMIN"
-      ? ["Dashboard", "Accounts", "Circulars", "Payments", "Craft Studio"]
+      ? ["Dashboard", "Accounts", "Circulars", "Payments", "Library", "Craft Studio"]
       : user.role === "TEACHER"
-        ? ["Daily DPT", "Weekly DPT", "Attendance & Leaves", "Notices & Class", "Diary & Marks", "Craft Studio"]
+        ? ["Daily DPT", "Weekly DPT", "Attendance & Leaves", "Notices & Class", "Diary & Timetable", "Library", "Craft Studio"]
         : user.role === "FEE_MANAGER"
-          ? ["Verify Payments", "Fee Ledger", "Gateway Config", "All Receipts"]
-          : ["Home & Notices", "DPT & Report Cards", "Fees & UPI Pay", "Academics & Leave", "Craft Studio"];
+          ? ["Verify Payments", "Fee Ledger", "Gateway Config", "All Receipts", "My Leave"]
+          : user.role === "LIBRARIAN"
+            ? ["Library Desk", "My Leave"]
+            : ["Home & Notices", "DPT & Report Cards", "Fees & UPI Pay", "Academics & Leave", "Craft Studio"];
 
   if (state.activeTab >= tabDefs.length) state.activeTab = 0;
 
@@ -3176,7 +3876,12 @@ function renderAuthenticatedShell(root) {
           ]
         : []),
       el("button", { type: "button", className: "icon-btn", onClick: toggleDarkMode, textContent: state.darkMode ? "Light" : "Dark" }),
-      el("button", { type: "button", className: "icon-btn", onClick: openProfileModal, textContent: "Profile" }),
+      el("button", {
+        type: "button",
+        className: "icon-btn",
+        onClick: openAccountDrawerModal,
+        textContent: `Switch Account (${Math.max(1, state.savedAccounts.length)})`,
+      }),
       el("button", {
         type: "button",
         className: "icon-btn",
@@ -3194,7 +3899,8 @@ function renderAuthenticatedShell(root) {
           state.token = null;
           state.dashboard = null;
           state.activeTab = 0;
-          showToast("Signed out.");
+          try { window.localStorage.removeItem(ACTIVE_ACCOUNT_KEY); } catch (_) {}
+          showToast("Signed out of current session.");
           render();
         },
         textContent: "Sign Out",
@@ -3237,7 +3943,9 @@ function renderAuthenticatedShell(root) {
         ? renderTeacherPortal(state.activeTab)
         : user.role === "FEE_MANAGER"
           ? renderFeeManagerPortal(state.activeTab)
-          : renderStudentPortal(state.activeTab);
+          : user.role === "LIBRARIAN"
+            ? renderLibrarianPortal(state.activeTab)
+            : renderStudentPortal(state.activeTab);
 
   const mainContent = el("main", { className: "main-content" }, [
     buildAppUpdateCard(state.dashboard?.gateway || state.appUpdate),
@@ -3281,6 +3989,22 @@ async function bootstrap() {
     const boot = await apiRequest("/api/bootstrap/status");
     state.needsAdminSetup = Boolean(boot.needsSetup);
     state.appUpdate = boot.appUpdate || null;
+    state.savedAccounts = loadSavedAccounts();
+    if (!state.needsAdminSetup && state.savedAccounts.length > 0) {
+      let activeKey = "";
+      try { activeKey = window.localStorage.getItem(ACTIVE_ACCOUNT_KEY) || ""; } catch (_) {}
+      const target = state.savedAccounts.find((a) => a.key === activeKey);
+      if (target && target.token) {
+        state.token = target.token;
+        try {
+          await refreshDashboard();
+        } catch (_) {
+          removeSavedAccountEntry(target.key);
+          state.token = null;
+          state.dashboard = null;
+        }
+      }
+    }
   } catch (err) {
     showToast(`Cloud connection notice: ${err.message}`);
   } finally {

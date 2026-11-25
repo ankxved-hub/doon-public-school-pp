@@ -40,7 +40,7 @@ service cloud.firestore {
 
     function isValidSchoolUser(data) {
       return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
-             data.role in ['ADMIN', 'TEACHER', 'FEE_MANAGER', 'STUDENT'] &&
+             data.role in ['ADMIN', 'TEACHER', 'FEE_MANAGER', 'LIBRARIAN', 'STUDENT'] &&
              data.userId is string && data.userId.size() >= 2 && data.userId.size() <= 40 &&
              data.password is string && data.password.size() >= 1 && data.password.size() <= 64 &&
              data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 100 &&
@@ -136,13 +136,33 @@ service cloud.firestore {
              data.studentDocId is string && data.studentDocId.size() >= 1 && data.studentDocId.size() <= 128 &&
              data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 100 &&
              data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 40 &&
-             data.className is string && data.className.size() >= 1 && data.className.size() <= 30 &&
-             data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+             data.className is string && data.className.size() <= 30 &&
+             data.section is string && data.section.size() <= 10 &&
+             data.get('applicantRole', 'STUDENT') in ['STUDENT', 'TEACHER', 'FEE_MANAGER', 'LIBRARIAN', 'ADMIN'] &&
+             data.get('targetRole', 'TEACHER') in ['TEACHER', 'ADMIN'] &&
              data.fromDate is string && data.fromDate.size() >= 1 && data.fromDate.size() <= 20 &&
              data.toDate is string && data.toDate.size() >= 1 && data.toDate.size() <= 20 &&
              data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 500 &&
              data.status in ['Pending', 'Approved', 'Rejected'] &&
              data.teacherRemark is string && data.teacherRemark.size() <= 300;
+    }
+
+    function isValidLibraryIssue(data) {
+      return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.bookTitle is string && data.bookTitle.size() >= 1 && data.bookTitle.size() <= 160 &&
+             data.bookCode is string && data.bookCode.size() <= 60 &&
+             data.author is string && data.author.size() <= 100 &&
+             data.borrowerDocId is string && data.borrowerDocId.size() <= 128 &&
+             data.borrowerUserId is string && data.borrowerUserId.size() <= 40 &&
+             data.borrowerName is string && data.borrowerName.size() >= 1 && data.borrowerName.size() <= 100 &&
+             data.borrowerRole in ['ADMIN', 'TEACHER', 'FEE_MANAGER', 'LIBRARIAN', 'STUDENT'] &&
+             data.borrowerClassInfo is string && data.borrowerClassInfo.size() <= 60 &&
+             data.issueDate is string && data.issueDate.size() >= 1 && data.issueDate.size() <= 20 &&
+             data.dueDate is string && data.dueDate.size() >= 1 && data.dueDate.size() <= 20 &&
+             data.returnedDate is string && data.returnedDate.size() <= 20 &&
+             data.status in ['ISSUED', 'RETURNED'] &&
+             data.issuedBy is string && data.issuedBy.size() <= 100 &&
+             data.notes is string && data.notes.size() <= 300;
     }
 
     function isValidHomework(data) {
@@ -256,7 +276,7 @@ service cloud.firestore {
     function isValidLoginTicket(data) {
       return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
              data.schoolUserDocId is string && data.schoolUserDocId.size() >= 1 && data.schoolUserDocId.size() <= 128 &&
-             data.role in ['ADMIN', 'TEACHER', 'FEE_MANAGER', 'STUDENT'] &&
+             data.role in ['ADMIN', 'TEACHER', 'FEE_MANAGER', 'LIBRARIAN', 'STUDENT'] &&
              data.userId is string && data.userId.size() >= 2 && data.userId.size() <= 40 &&
              data.className is string && data.className.size() <= 30 &&
              data.section is string && data.section.size() <= 10;
@@ -330,6 +350,10 @@ service cloud.firestore {
         return isMember() && memberRole() == 'FEE_MANAGER';
       }
 
+      function isLibrarian() {
+        return isMember() && memberRole() == 'LIBRARIAN';
+      }
+
       function teacherOwnsClassSection(cls, sec) {
         return isTeacher() &&
                cls is string && cls.size() > 0 &&
@@ -358,7 +382,7 @@ service cloud.firestore {
           incoming().keys().hasAll(['ownerUid', 'schoolUserDocId', 'role', 'loginTicketId', 'createdAt', 'updatedAt']) &&
           incoming().keys().hasOnly(['ownerUid', 'schoolUserDocId', 'role', 'loginTicketId', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
-          incoming().role in ['ADMIN', 'TEACHER', 'FEE_MANAGER', 'STUDENT'] &&
+          incoming().role in ['ADMIN', 'TEACHER', 'FEE_MANAGER', 'LIBRARIAN', 'STUDENT'] &&
           isValidId(incoming().schoolUserDocId) &&
           isValidId(incoming().loginTicketId) &&
           existsAfter(loginTicketPath(incoming().loginTicketId)) &&
@@ -368,7 +392,7 @@ service cloud.firestore {
           incoming().ownerUid == existing().ownerUid &&
           isValidTimestampsUpdate() &&
           incoming().diff(existing()).affectedKeys().hasOnly(['schoolUserDocId', 'role', 'loginTicketId', 'updatedAt']) &&
-          incoming().role in ['ADMIN', 'TEACHER', 'FEE_MANAGER', 'STUDENT'] &&
+          incoming().role in ['ADMIN', 'TEACHER', 'FEE_MANAGER', 'LIBRARIAN', 'STUDENT'] &&
           isValidId(incoming().schoolUserDocId) &&
           isValidId(incoming().loginTicketId) &&
           existsAfter(loginTicketPath(incoming().loginTicketId)) &&
@@ -547,12 +571,12 @@ service cloud.firestore {
         allow create: if isSignedIn() && isValidId(docId) &&
           incoming().ownerUid == request.auth.uid &&
           incoming().keys().hasAll(['ownerUid', 'studentDocId', 'studentName', 'admissionNo', 'className', 'section', 'fromDate', 'toDate', 'reason', 'status', 'teacherRemark', 'createdAt', 'updatedAt']) &&
-          incoming().keys().hasOnly(['ownerUid', 'studentDocId', 'studentName', 'admissionNo', 'className', 'section', 'fromDate', 'toDate', 'reason', 'status', 'teacherRemark', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'studentDocId', 'studentName', 'admissionNo', 'className', 'section', 'applicantRole', 'targetRole', 'fromDate', 'toDate', 'reason', 'status', 'teacherRemark', 'createdAt', 'updatedAt']) &&
           isValidTimestampsCreate() &&
           isValidLeave(incoming()) &&
           (isBootstrappingBatch() || isMember());
         allow update: if isValidId(docId) &&
-          (isAdmin() || isTeacher()) &&
+          (isAdmin() || (isTeacher() && existing().get('targetRole', 'TEACHER') == 'TEACHER')) &&
           incoming().ownerUid == existing().ownerUid &&
           existing().status == 'Pending' &&
           isValidTimestampsUpdate() &&
@@ -749,6 +773,25 @@ service cloud.firestore {
           isValidTimetable(incoming()) &&
           incoming().diff(existing()).affectedKeys().hasOnly(['slots', 'updatedBy', 'updatedAt']);
         allow delete: if isValidId(docId) && (isAdmin() || isTeacher());
+      }
+
+      match /libraryIssues/{docId} {
+        allow list: if isMember();
+        allow get: if isValidId(docId) && isMember();
+        allow create: if isSignedIn() && isValidId(docId) &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().keys().hasAll(['ownerUid', 'bookTitle', 'bookCode', 'author', 'borrowerDocId', 'borrowerUserId', 'borrowerName', 'borrowerRole', 'borrowerClassInfo', 'issueDate', 'dueDate', 'returnedDate', 'status', 'issuedBy', 'notes', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ownerUid', 'bookTitle', 'bookCode', 'author', 'borrowerDocId', 'borrowerUserId', 'borrowerName', 'borrowerRole', 'borrowerClassInfo', 'issueDate', 'dueDate', 'returnedDate', 'status', 'issuedBy', 'notes', 'createdAt', 'updatedAt']) &&
+          isValidTimestampsCreate() &&
+          isValidLibraryIssue(incoming()) &&
+          (isBootstrappingBatch() || isAdmin() || isTeacher() || isLibrarian());
+        allow update: if isValidId(docId) &&
+          (isAdmin() || isTeacher() || isLibrarian()) &&
+          incoming().ownerUid == existing().ownerUid &&
+          isValidTimestampsUpdate() &&
+          isValidLibraryIssue(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'returnedDate', 'notes', 'updatedAt']);
+        allow delete: if isValidId(docId) && (isAdmin() || isLibrarian());
       }
     }
   }

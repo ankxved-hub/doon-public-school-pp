@@ -22,6 +22,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.data.model.*
 import com.example.ui.components.OfficialFeeReceiptDialog
+import com.example.ui.components.StaffLeaveTabScreen
 import com.example.ui.components.StatMetricCard
 import com.example.ui.components.formatInr
 import com.example.ui.theme.*
@@ -37,11 +38,13 @@ fun FeeManagerScreen(
     gateway: GatewayConfig,
     feeItems: List<FeeItem>,
     payments: List<FeePayment>,
+    leaves: List<LeaveRequest> = emptyList(),
     onVerifyPayment: (FeePayment, String, String, Int) -> Unit,
     onRejectPayment: (FeePayment, String, String, String) -> Unit,
     onAssignFeeDemands: (FeeBillRequest) -> Unit,
     onDeleteFeeItem: (FeeItem) -> Unit,
     onSaveGatewayConfig: (GatewayConfig) -> Unit,
+    onSubmitLeave: (LeaveRequest) -> Unit = {},
     onOpenProfileEdit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -69,11 +72,17 @@ fun FeeManagerScreen(
             onSaveGatewayConfig = onSaveGatewayConfig,
             modifier = modifier,
         )
-        else -> FeePaymentsScreen(
+        3 -> FeePaymentsScreen(
             payments = payments,
             feeItems = feeItems,
             students = students,
             isStudentView = false,
+            modifier = modifier,
+        )
+        else -> StaffLeaveTabScreen(
+            staffUser = feeManager,
+            leaves = leaves,
+            onSubmitLeave = onSubmitLeave,
             modifier = modifier,
         )
     }

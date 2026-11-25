@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -40,6 +41,7 @@ import com.example.data.remote.CloudflareApiClient
 import com.example.data.repository.SchoolRepository
 import com.example.ui.auth.GoogleAuthGateScreen
 import com.example.ui.auth.signOutGoogle
+import com.example.ui.components.AccountSwitcherDialog
 import com.example.ui.components.AppUpdateBannerCard
 import com.example.ui.components.AppUpdatePromptDialog
 import com.example.ui.components.ProfileEditDialog
@@ -48,6 +50,7 @@ import com.example.ui.screens.AdminScreen
 import com.example.ui.screens.AiChatbotScreen
 import com.example.ui.screens.AppCreditsScreen
 import com.example.ui.screens.FeeManagerScreen
+import com.example.ui.screens.LibrarianScreen
 import com.example.ui.screens.SchoolRoleLoginScreen
 import com.example.ui.screens.StudentScreen
 import com.example.ui.screens.TeacherScreen
@@ -240,6 +243,7 @@ private fun AuthenticatedSchoolShell(
     val craftProjectsUi by viewModel.craftProjectsState.collectAsStateWithLifecycle()
     val campusPostersUi by viewModel.campusPostersState.collectAsStateWithLifecycle()
     val timetablesUi by viewModel.timetablesState.collectAsStateWithLifecycle()
+    val libraryIssuesUi by viewModel.libraryIssuesState.collectAsStateWithLifecycle()
     val likedProjectIds by viewModel.likedProjectIds.collectAsStateWithLifecycle()
     val likingProjectIds by viewModel.likingProjectIds.collectAsStateWithLifecycle()
     val aiMessages by viewModel.aiMessages.collectAsStateWithLifecycle()
@@ -249,6 +253,8 @@ private fun AuthenticatedSchoolShell(
     val craftAiImageState by viewModel.craftAiImageState.collectAsStateWithLifecycle()
     val generatingCraftPostId by viewModel.generatingCraftPostId.collectAsStateWithLifecycle()
     val appUpdateState by viewModel.appUpdateState.collectAsStateWithLifecycle()
+    val savedAccounts by viewModel.savedAccounts.collectAsStateWithLifecycle()
+    val isSwitchingAccount by viewModel.isSwitchingAccount.collectAsStateWithLifecycle()
 
     val users = (usersUi as? DataUiState.Success)?.data ?: emptyList()
     val rawGateway = (gatewayUi as? DataUiState.Success)?.data?.firstOrNull()
@@ -266,6 +272,7 @@ private fun AuthenticatedSchoolShell(
     val craftProjects = (craftProjectsUi as? DataUiState.Success)?.data ?: emptyList()
     val campusPosters = (campusPostersUi as? DataUiState.Success)?.data ?: emptyList()
     val timetables = (timetablesUi as? DataUiState.Success)?.data ?: emptyList()
+    val libraryIssues = (libraryIssuesUi as? DataUiState.Success)?.data ?: emptyList()
 
     val playUpdateCoordinator = rememberPlayInAppUpdateCoordinator(
         onStatusMessage = { viewModel.showMessage(it) },
@@ -300,7 +307,7 @@ private fun AuthenticatedSchoolShell(
     }
 
     val user = activeUser
-    var showWelcomeCreditsPage by remember(user?.id, user?.role) { mutableStateOf(true) }
+    var showWelcomeCreditsPage by remember { mutableStateOf(true) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (user == null) {
@@ -354,6 +361,13 @@ private fun AuthenticatedSchoolShell(
                         viewModel.checkForAppUpdate(gateway, manual = true)
                     },
                     onInstallUpdate = { url -> playUpdateCoordinator.startRealInAppOrFallbackUpdate(url) },
+                    savedAccounts = savedAccounts,
+                    isSwitchingAccount = isSwitchingAccount,
+                    onQuickSwitchAccount = { acc ->
+                        showWelcomeCreditsPage = false
+                        viewModel.switchToSavedAccount(acc)
+                    },
+                    onRemoveSavedAccount = { acc -> viewModel.removeSavedAccount(acc) },
                     onShowMessage = { viewModel.showMessage(it) },
                 )
             }
@@ -385,6 +399,11 @@ private fun AuthenticatedSchoolShell(
                 NavTab("Ledger", Icons.Filled.AccountBalanceWallet),
                 NavTab("Gateway", Icons.Filled.QrCode2),
                 NavTab("Payments", Icons.Filled.ReceiptLong),
+                NavTab("My Leave", Icons.Filled.EventNote),
+            )
+            "LIBRARIAN" -> listOf(
+                NavTab("Library", Icons.Filled.LocalLibrary),
+                NavTab("My Leave", Icons.Filled.EventNote),
             )
             else -> listOf(
                 NavTab("Home", Icons.Filled.Home),
@@ -399,6 +418,7 @@ private fun AuthenticatedSchoolShell(
     var selectedTab by remember(user.id, user.role) { mutableIntStateOf(0) }
     var showProfileEditDialog by remember { mutableStateOf(false) }
     var showAiChatbot by remember { mutableStateOf(false) }
+    var showAccountSwitcher by remember { mutableStateOf(false) }
 
     if (showAiChatbot) {
         AiChatbotScreen(
@@ -432,7 +452,15 @@ private fun AuthenticatedSchoolShell(
                         actionIconContentColor = GoldAmber,
                     ),
                     title = {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { showAccountSwitcher = true }
+                                .padding(vertical = 2.dp, horizontal = 2.dp)
+                                .testTag("topbar_account_header_switcher"),
+                        ) {
                             Surface(
                                 color = Color.White,
                                 shape = RoundedCornerShape(10.dp),
@@ -449,11 +477,22 @@ private fun AuthenticatedSchoolShell(
                             }
                             Column {
                                 Text(SchoolInfo.SHORT_NAME, style = MaterialTheme.typography.titleMedium, color = Color.White)
-                                Text(
-                                    "${user.role.replace('_', ' ')} • ${user.userId}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = GoldAmber,
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    Text(
+                                        "${user.role.replace('_', ' ')} • ${user.userId}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = GoldAmber,
+                                    )
+                                    Icon(
+                                        Icons.Filled.ArrowDropDown,
+                                        contentDescription = "Switch Account",
+                                        tint = GoldAmber,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
                             }
                         }
                     },
@@ -523,10 +562,22 @@ private fun AuthenticatedSchoolShell(
                             Icon(Icons.Filled.ManageAccounts, contentDescription = "Profile & App Settings")
                         }
                         IconButton(
-                            onClick = { viewModel.logoutSchoolRole() },
+                            onClick = { showAccountSwitcher = true },
                             modifier = Modifier.testTag("topbar_switch_role_btn"),
                         ) {
-                            Icon(Icons.Filled.SwitchAccount, contentDescription = "Switch School Role")
+                            if (savedAccounts.size > 1) {
+                                BadgedBox(
+                                    badge = {
+                                        Badge(containerColor = GoldAmber, contentColor = NavyDeep) {
+                                            Text(savedAccounts.size.toString())
+                                        }
+                                    }
+                                ) {
+                                    Icon(Icons.Filled.SwitchAccount, contentDescription = "Switch or Add Account")
+                                }
+                            } else {
+                                Icon(Icons.Filled.SwitchAccount, contentDescription = "Switch or Add Account")
+                            }
                         }
                         if (!viewModel.isCloudflareMode) {
                             IconButton(
@@ -615,6 +666,8 @@ private fun AuthenticatedSchoolShell(
                             dptWeekly = dptWeekly,
                             termMarks = termMarks,
                             attendance = attendance,
+                            leaves = leaves,
+                            libraryIssues = libraryIssues,
                             feeItems = feeItems,
                             payments = payments,
                             craftProjects = craftProjects,
@@ -627,6 +680,9 @@ private fun AuthenticatedSchoolShell(
                             onDeleteUser = { viewModel.deleteUser(it) },
                             onDeleteRecord = { col, id, lbl -> viewModel.deleteRecord(col, id, lbl) },
                             onPostCircular = { viewModel.postCircular(it) },
+                            onUpdateLeaveStatus = { id, st, rem -> viewModel.updateLeaveStatus(id, st, rem) },
+                            onIssueBook = { viewModel.issueLibraryBook(it) },
+                            onReturnBook = { viewModel.returnLibraryBook(it) },
                             onPublishCampusPoster = { viewModel.publishCampusPoster(it) },
                             onGenerateCraftAiImage = { t, cat, desc, mat -> viewModel.generateCraftAiImage(t, cat, desc, mat) },
                             onGenerateCustomAiImage = { prompt -> viewModel.generateCustomAiImage(prompt) },
@@ -653,6 +709,7 @@ private fun AuthenticatedSchoolShell(
                             homework = homework,
                             doubts = doubts,
                             timetables = timetables,
+                            libraryIssues = libraryIssues,
                             craftProjects = craftProjects,
                             likedProjectIds = likedProjectIds,
                             likingProjectIds = likingProjectIds,
@@ -663,6 +720,9 @@ private fun AuthenticatedSchoolShell(
                             onMarkAttendance = { viewModel.markStudentAttendance(it) },
                             onMarkAllPresent = { sts, d, c, s, by -> viewModel.markAllPresent(sts, d, c, s, by) },
                             onUpdateLeaveStatus = { id, st, rem -> viewModel.updateLeaveStatus(id, st, rem) },
+                            onSubmitMyLeave = { viewModel.submitLeave(it) },
+                            onIssueBook = { viewModel.issueLibraryBook(it) },
+                            onReturnBook = { viewModel.returnLibraryBook(it) },
                             onPostNotice = { viewModel.postCircular(it) },
                             onPostHomework = { viewModel.postHomework(it) },
                             onPublishTermMarks = { viewModel.publishTermMarks(it) },
@@ -688,11 +748,25 @@ private fun AuthenticatedSchoolShell(
                             gateway = gateway,
                             feeItems = feeItems,
                             payments = payments,
+                            leaves = leaves,
                             onVerifyPayment = { p, by, at, cnt -> viewModel.verifyPayment(p, by, at, cnt) },
                             onRejectPayment = { p, r, by, at -> viewModel.rejectPayment(p, r, by, at) },
                             onAssignFeeDemands = { req -> viewModel.assignFeeDemands(req) },
                             onDeleteFeeItem = { viewModel.deleteRecord("feeItems", it.id, it.title) },
                             onSaveGatewayConfig = { viewModel.saveGatewayConfig(it) },
+                            onSubmitLeave = { viewModel.submitLeave(it) },
+                            onOpenProfileEdit = { showProfileEditDialog = true },
+                        )
+                        "LIBRARIAN" -> LibrarianScreen(
+                            activeTab = selectedTab,
+                            librarian = user,
+                            users = users,
+                            libraryIssues = libraryIssues,
+                            leaves = leaves,
+                            onIssueBook = { viewModel.issueLibraryBook(it) },
+                            onReturnBook = { viewModel.returnLibraryBook(it) },
+                            onDeleteLibraryIssue = { issue -> viewModel.deleteRecord("libraryIssues", issue.id, issue.bookTitle) },
+                            onSubmitLeave = { viewModel.submitLeave(it) },
                             onOpenProfileEdit = { showProfileEditDialog = true },
                         )
                         else -> StudentScreen(
@@ -711,6 +785,7 @@ private fun AuthenticatedSchoolShell(
                             payments = payments,
                             doubts = doubts,
                             timetables = timetables,
+                            libraryIssues = libraryIssues,
                             campusPosters = campusPosters,
                             craftProjects = craftProjects,
                             likedProjectIds = likedProjectIds,
@@ -762,6 +837,25 @@ private fun AuthenticatedSchoolShell(
             },
             onInstallClick = { url -> playUpdateCoordinator.startRealInAppOrFallbackUpdate(url) },
             onShowMessage = { viewModel.showMessage(it) },
+        )
+    }
+
+    if (showAccountSwitcher) {
+        AccountSwitcherDialog(
+            activeUser = user,
+            savedAccounts = savedAccounts,
+            isSwitching = isSwitchingAccount,
+            onSwitchAccount = { target ->
+                viewModel.switchToSavedAccount(target) { ok ->
+                    if (ok) showAccountSwitcher = false
+                }
+            },
+            onRemoveAccount = { target -> viewModel.removeSavedAccount(target) },
+            onAddAccount = { role, uidInput, pwInput ->
+                viewModel.loginSchoolRole(role, uidInput, pwInput)
+            },
+            onSignOutCurrent = { viewModel.logoutSchoolRole() },
+            onDismiss = { showAccountSwitcher = false },
         )
     }
     }

@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -31,6 +33,7 @@ import com.example.ui.components.AttachmentPickerChip
 import com.example.ui.components.AttachmentPreviewBlock
 import com.example.ui.components.PickedAttachment
 import com.example.ui.components.SchoolDatePickerField
+import com.example.ui.components.StaffLeaveApplyCard
 import com.example.ui.components.StudentDptResultCard
 import com.example.ui.components.TeacherDailyPracticeTestsDashboard
 import com.example.ui.components.readAttachmentFromUri
@@ -51,6 +54,7 @@ fun TeacherScreen(
     homework: List<HomeworkItem>,
     doubts: List<DoubtMessage>,
     timetables: List<ClassTimetable> = emptyList(),
+    libraryIssues: List<LibraryIssue> = emptyList(),
     craftProjects: List<CraftProject> = emptyList(),
     likedProjectIds: Set<String> = emptySet(),
     likingProjectIds: Set<String> = emptySet(),
@@ -61,6 +65,9 @@ fun TeacherScreen(
     onMarkAttendance: (AttendanceRecord) -> Unit,
     onMarkAllPresent: (List<SchoolUser>, String, String, String, String) -> Unit,
     onUpdateLeaveStatus: (String, String, String) -> Unit,
+    onSubmitMyLeave: (LeaveRequest) -> Unit = {},
+    onIssueBook: (LibraryIssue) -> Unit = {},
+    onReturnBook: (LibraryIssue) -> Unit = {},
     onPostNotice: (Circular) -> Unit,
     onPostHomework: (HomeworkItem) -> Unit,
     onPublishTermMarks: (TermMarkCard) -> Unit,
@@ -96,6 +103,7 @@ fun TeacherScreen(
     var showCraftStudioOverlay by remember { mutableStateOf(false) }
     var showClassStudentsOverlay by remember { mutableStateOf(false) }
     var showTimetableOverlay by remember { mutableStateOf(false) }
+    var showLibraryDeskOverlay by remember { mutableStateOf(false) }
 
     val allStudents = remember(users) {
         users.filter { it.role == "STUDENT" }.sortedBy { it.userId }
@@ -104,6 +112,21 @@ fun TeacherScreen(
         allStudents.filter {
             it.className == selectedClass && it.section == selectedSection
         }
+    }
+
+    if (showLibraryDeskOverlay) {
+        BackHandler { showLibraryDeskOverlay = false }
+        LibraryManagementContent(
+            actor = teacher,
+            allUsers = users,
+            libraryIssues = libraryIssues,
+            onIssueBook = onIssueBook,
+            onReturnBook = onReturnBook,
+            onDeleteLibraryIssue = { issue -> onDeleteRecord("libraryIssues", issue.id, issue.bookTitle) },
+            onBack = { showLibraryDeskOverlay = false },
+            modifier = modifier,
+        )
+        return
     }
 
     if (showClassStudentsOverlay) {
@@ -289,6 +312,13 @@ fun TeacherScreen(
                         leadingIcon = { Icon(Icons.Filled.Schedule, contentDescription = "Edit Timetable", modifier = Modifier.size(16.dp)) },
                         modifier = Modifier.testTag("teacher_bar_timetable_chip"),
                     )
+                    val activeLibraryCount = remember(libraryIssues) { libraryIssues.count { it.status != "RETURNED" } }
+                    AssistChip(
+                        onClick = { showLibraryDeskOverlay = true },
+                        label = { Text("Library ($activeLibraryCount)") },
+                        leadingIcon = { Icon(Icons.Filled.LocalLibrary, contentDescription = "Open Library Management", modifier = Modifier.size(16.dp)) },
+                        modifier = Modifier.testTag("teacher_bar_library_chip"),
+                    )
                 }
             }
         }
@@ -328,6 +358,8 @@ fun TeacherScreen(
                 onMarkAttendance = onMarkAttendance,
                 onMarkAllPresent = onMarkAllPresent,
                 onUpdateLeaveStatus = onUpdateLeaveStatus,
+                onSubmitMyLeave = onSubmitMyLeave,
+                onShowMessage = onShowMessage,
                 onOpenManageClassStudents = { showClassStudentsOverlay = true },
             )
             3 -> TeacherNoticesTab(
@@ -692,9 +724,18 @@ private fun AttendanceAndLeaveTab(
     onMarkAttendance: (AttendanceRecord) -> Unit,
     onMarkAllPresent: (List<SchoolUser>, String, String, String, String) -> Unit,
     onUpdateLeaveStatus: (String, String, String) -> Unit,
+    onSubmitMyLeave: (LeaveRequest) -> Unit,
+    onShowMessage: (String) -> Unit,
     onOpenManageClassStudents: () -> Unit,
 ) {
+    val context = LocalContext.current
     val remarkInputs = remember { mutableStateMapOf<String, String>() }
+    val studentLeaves = remember(leaves) {
+        leaves.filter {
+            it.targetRole.equals("TEACHER", ignoreCase = true) ||
+                (it.targetRole.isBlank() && it.applicantRole.equals("STUDENT", ignoreCase = true))
+        }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -745,9 +786,9 @@ private fun AttendanceAndLeaveTab(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text("Daily Attendance ($selectedClass-$selectedSection)", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-                    Text("Date: $selectedDate", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Date: $selectedDate • Marking Absent auto-sends notice to parents", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Button(
                     onClick = { onMarkAllPresent(classStudents, selectedDate, selectedClass, selectedSection, teacher.userId) },
@@ -765,7 +806,7 @@ private fun AttendanceAndLeaveTab(
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                border = BorderStroke(1.dp, if (current == "Absent") RoseError.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outline),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -774,11 +815,24 @@ private fun AttendanceAndLeaveTab(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(st.fullName, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-                            Text(st.userId, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                "${st.userId}${if (st.parentName.isNotBlank()) " • Parent: ${st.parentName}" else ""}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
-                        Text(current, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                        Text(
+                            current,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = when (current) {
+                                "Present" -> EmeraldSuccess
+                                "Absent" -> RoseError
+                                "Leave" -> GoldAmberDark
+                                else -> MaterialTheme.colorScheme.primary
+                            },
+                        )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         listOf("Present" to EmeraldSuccess, "Absent" to RoseError, "Leave" to GoldAmberDark).forEach { (status, tint) ->
@@ -802,69 +856,153 @@ private fun AttendanceAndLeaveTab(
                             )
                         }
                     }
+                    if (current == "Absent") {
+                        Surface(
+                            color = RoseContainer,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Icon(Icons.Filled.NotificationsActive, contentDescription = null, tint = RoseError, modifier = Modifier.size(16.dp))
+                                    Text(
+                                        "Parent Absence Notice sent automatically",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = RoseError,
+                                    )
+                                }
+                                if (st.phone.isNotBlank()) {
+                                    TextButton(
+                                        onClick = {
+                                            val smsBody = "Doon Public School, Etah: Dear ${st.parentName.ifBlank { "Parent" }}, your ward ${st.fullName} ($selectedClass-$selectedSection) is marked ABSENT on $selectedDate. Please contact the class teacher or submit a leave application in the school app."
+                                            val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${st.phone}")).apply {
+                                                putExtra("sms_body", smsBody)
+                                            }
+                                            runCatching { context.startActivity(intent) }
+                                                .onFailure { onShowMessage("No SMS app available on this device.") }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    ) {
+                                        Icon(Icons.Filled.Sms, contentDescription = "SMS Parent", tint = NavyDeep, modifier = Modifier.size(15.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("SMS Parent", style = MaterialTheme.typography.labelSmall, color = NavyDeep, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
 
         item {
-            Text("STUDENT LEAVE APPLICATIONS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+            Text(
+                "STUDENT LEAVE APPLICATIONS (FOR TEACHER APPROVAL)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp),
+            )
         }
 
-        items(leaves, key = { it.id }) { lv ->
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("${lv.studentName} (${lv.className}-${lv.section})", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-                        Surface(
-                            color = when (lv.status) {
-                                "Approved" -> EmeraldContainer
-                                "Rejected" -> RoseContainer
-                                else -> GoldSoft
-                            },
-                            shape = RoundedCornerShape(8.dp),
-                        ) {
-                            Text(
-                                lv.status,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = NavyDeep,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            )
-                        }
-                    }
-                    Text("${lv.fromDate} to ${lv.toDate} • ${lv.reason}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (lv.status == "Pending") {
-                        OutlinedTextField(
-                            value = remarkInputs[lv.id] ?: "",
-                            onValueChange = { remarkInputs[lv.id] = it },
-                            label = { Text("Teacher Remark") },
-                            singleLine = true,
+        if (studentLeaves.isEmpty()) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        "No student leave applications pending right now.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(14.dp),
+                    )
+                }
+            }
+        } else {
+            items(studentLeaves, key = { it.id }) { lv ->
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
                             modifier = Modifier.fillMaxWidth(),
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = { onUpdateLeaveStatus(lv.id, "Approved", remarkInputs[lv.id]?.ifBlank { "Approved" } ?: "Approved") },
-                                colors = ButtonDefaults.buttonColors(containerColor = EmeraldSuccess, contentColor = Color.White),
-                                modifier = Modifier.weight(1f),
-                            ) { Text("Approve") }
-                            OutlinedButton(
-                                onClick = { onUpdateLeaveStatus(lv.id, "Rejected", remarkInputs[lv.id]?.ifBlank { "Unable to approve" } ?: "Unable to approve") },
-                                modifier = Modifier.weight(1f),
-                            ) { Text("Reject", color = RoseError) }
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("${lv.studentName} (${lv.className}-${lv.section})", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                            Surface(
+                                color = when (lv.status) {
+                                    "Approved" -> EmeraldContainer
+                                    "Rejected" -> RoseContainer
+                                    else -> GoldSoft
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                            ) {
+                                Text(
+                                    lv.status,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = NavyDeep,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                )
+                            }
                         }
-                    } else if (lv.teacherRemark.isNotBlank()) {
-                        Text("Remark: ${lv.teacherRemark}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        Text("${lv.fromDate} to ${lv.toDate} • ${lv.reason}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (lv.status == "Pending") {
+                            OutlinedTextField(
+                                value = remarkInputs[lv.id] ?: "",
+                                onValueChange = { remarkInputs[lv.id] = it },
+                                label = { Text("Teacher Remark") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { onUpdateLeaveStatus(lv.id, "Approved", remarkInputs[lv.id]?.ifBlank { "Approved" } ?: "Approved") },
+                                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldSuccess, contentColor = Color.White),
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("Approve") }
+                                OutlinedButton(
+                                    onClick = { onUpdateLeaveStatus(lv.id, "Rejected", remarkInputs[lv.id]?.ifBlank { "Unable to approve" } ?: "Unable to approve") },
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("Reject", color = RoseError) }
+                            }
+                        } else if (lv.teacherRemark.isNotBlank()) {
+                            Text("Remark: ${lv.teacherRemark}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        }
                     }
                 }
             }
+        }
+
+        // Teacher's Own Leave Application -> Routed to Principal / Admin
+        item {
+            Text(
+                "MY LEAVE APPLICATION (SENT TO PRINCIPAL / ADMIN)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 10.dp),
+            )
+        }
+        item {
+            StaffLeaveApplyCard(
+                staffUser = teacher,
+                myLeaves = leaves.filter { it.studentDocId == teacher.id },
+                onSubmitLeave = onSubmitMyLeave,
+            )
         }
     }
 }
@@ -1414,9 +1552,15 @@ private fun TeacherTimetableEditorView(
     onBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    var ttClass by remember(initialClass) { mutableStateOf(initialClass.ifBlank { "Class VII" }) }
-    var ttSection by remember(initialSection) { mutableStateOf(initialSection.ifBlank { "A" }) }
+    var ttClass by remember(initialClass, teacher.className) {
+        mutableStateOf(initialClass.ifBlank { teacher.className.ifBlank { "Class VII" } })
+    }
+    var ttSection by remember(initialSection, teacher.section) {
+        mutableStateOf(initialSection.ifBlank { teacher.section.ifBlank { "A" } })
+    }
+    var selectedDay by remember { mutableStateOf(SchoolCatalog.todayShortDay()) }
     var classDropdownExpanded by remember { mutableStateOf(false) }
+    var copyFromDayExpanded by remember { mutableStateOf(false) }
 
     val savedDoc = remember(timetables, ttClass, ttSection) {
         timetables.firstOrNull { it.className == ttClass && it.section == ttSection }
@@ -1427,6 +1571,16 @@ private fun TeacherTimetableEditorView(
             ?.takeIf { it.isNotEmpty() }
             ?: SchoolCatalog.defaultTimetableSlotsFor(ttClass, ttSection)
         mutableStateListOf<SchoolCatalog.TimetableSlot>().apply { addAll(loaded) }
+    }
+
+    val dayFullName = when (selectedDay) {
+        "Mon" -> "Monday"
+        "Tue" -> "Tuesday"
+        "Wed" -> "Wednesday"
+        "Thu" -> "Thursday"
+        "Fri" -> "Friday"
+        "Sat" -> "Saturday"
+        else -> "Sunday"
     }
 
     LazyColumn(
@@ -1446,18 +1600,18 @@ private fun TeacherTimetableEditorView(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     if (onBack != null) {
-                        IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
+                        IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = GoldAmber)
                         }
                     }
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("CLASS-WISE TIMETABLE EDITOR", style = MaterialTheme.typography.labelSmall, color = GoldAmber)
+                        Text("SMART FIXED WEEKLY TIMETABLE", style = MaterialTheme.typography.labelSmall, color = GoldAmber)
                         Text("$ttClass - Section $ttSection", style = MaterialTheme.typography.titleLarge, color = Color.White)
                         Text(
-                            if (savedDoc != null) "Custom Timetable Saved • Last edited by ${savedDoc.updatedBy}"
-                            else "Using Default Template • Edit & Save separately per Class-Section",
+                            if (savedDoc != null) "Saved Weekly Schedule • Last edited by ${savedDoc.updatedBy}"
+                            else "Set each day (Mon–Sun) independently. Repeats every week all year.",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.8f),
+                            color = Color.White.copy(alpha = 0.82f),
                         )
                     }
                 }
@@ -1472,7 +1626,7 @@ private fun TeacherTimetableEditorView(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Select Class & Section to Edit Independently", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+                    Text("1. Select Class & Section", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
                     Box(modifier = Modifier.fillMaxWidth()) {
                         OutlinedButton(
                             onClick = { classDropdownExpanded = true },
@@ -1507,16 +1661,98 @@ private fun TeacherTimetableEditorView(
                             )
                         }
                     }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    Text(
+                        "2. Choose Day of Week to Edit (Different Schedule Per Day)",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "Fill only the days your class runs (e.g. Mon, Tue, Thu, Fri) and leave off days empty. This fixed schedule never resets across weeks or years.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    ) {
+                        SchoolCatalog.weekDays.forEach { day ->
+                            val filledCount = editableSlots.count { SchoolCatalog.subjectForDay(it, day).isNotBlank() }
+                            FilterChip(
+                                selected = selectedDay == day,
+                                onClick = { selectedDay = day },
+                                label = { Text("$day ($filledCount)") },
+                                modifier = Modifier.testTag("tt_day_chip_${day.lowercase()}"),
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(modifier = Modifier.weight(1f)) {
+                            OutlinedButton(
+                                onClick = { copyFromDayExpanded = true },
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("tt_copy_day_btn"),
+                            ) {
+                                Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Copy From Day...")
+                            }
+                            DropdownMenu(expanded = copyFromDayExpanded, onDismissRequest = { copyFromDayExpanded = false }) {
+                                SchoolCatalog.weekDays.filter { it != selectedDay }.forEach { sourceDay ->
+                                    DropdownMenuItem(
+                                        text = { Text("Copy $sourceDay → $selectedDay") },
+                                        onClick = {
+                                            for (i in editableSlots.indices) {
+                                                val srcSubj = SchoolCatalog.subjectForDay(editableSlots[i], sourceDay)
+                                                editableSlots[i] = SchoolCatalog.withSubjectForDay(editableSlots[i], selectedDay, srcSubj)
+                                            }
+                                            copyFromDayExpanded = false
+                                            onShowMessage("Copied $sourceDay schedule into $dayFullName.")
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                for (i in editableSlots.indices) {
+                                    editableSlots[i] = SchoolCatalog.withSubjectForDay(editableSlots[i], selectedDay, "")
+                                }
+                                onShowMessage("Cleared $dayFullName (marked as Off / No Classes).")
+                            },
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("tt_clear_day_btn"),
+                        ) {
+                            Icon(Icons.Filled.EventBusy, contentDescription = null, tint = RoseError, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Clear $selectedDay", color = RoseError)
+                        }
+                    }
                 }
             }
         }
 
-        items(editableSlots.indices.toList(), key = { idx -> "${ttClass}_${ttSection}_$idx" }) { idx ->
+        item {
+            Text(
+                "$dayFullName SCHEDULE (${editableSlots.count { SchoolCatalog.subjectForDay(it, selectedDay).isNotBlank() }} ACTIVE PERIODS)",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+
+        items(editableSlots.indices.toList(), key = { idx -> "${ttClass}_${ttSection}_${selectedDay}_$idx" }) { idx ->
             val slot = editableSlots[idx]
+            val currentDaySubject = SchoolCatalog.subjectForDay(slot, selectedDay)
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                border = BorderStroke(1.dp, if (currentDaySubject.isNotBlank()) GoldAmber.copy(alpha = 0.7f) else MaterialTheme.colorScheme.outline),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1525,10 +1761,10 @@ private fun TeacherTimetableEditorView(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("Slot #${idx + 1}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                        Text("Period Row #${idx + 1} • $dayFullName", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                         if (editableSlots.size > 1) {
                             IconButton(onClick = { editableSlots.removeAt(idx) }) {
-                                Icon(Icons.Filled.Delete, contentDescription = "Remove slot", tint = RoseError)
+                                Icon(Icons.Filled.Delete, contentDescription = "Remove period row", tint = RoseError)
                             }
                         }
                     }
@@ -1545,55 +1781,30 @@ private fun TeacherTimetableEditorView(
                             onValueChange = { editableSlots[idx] = slot.copy(time = it.take(30)) },
                             label = { Text("Time") },
                             singleLine = true,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1.2f),
                         )
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedTextField(
-                            value = slot.mon,
-                            onValueChange = { editableSlots[idx] = slot.copy(mon = it.take(40)) },
-                            label = { Text("Mon") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                        OutlinedTextField(
-                            value = slot.tue,
-                            onValueChange = { editableSlots[idx] = slot.copy(tue = it.take(40)) },
-                            label = { Text("Tue") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                        OutlinedTextField(
-                            value = slot.wed,
-                            onValueChange = { editableSlots[idx] = slot.copy(wed = it.take(40)) },
-                            label = { Text("Wed") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedTextField(
-                            value = slot.thu,
-                            onValueChange = { editableSlots[idx] = slot.copy(thu = it.take(40)) },
-                            label = { Text("Thu") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                        OutlinedTextField(
-                            value = slot.fri,
-                            onValueChange = { editableSlots[idx] = slot.copy(fri = it.take(40)) },
-                            label = { Text("Fri") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                        OutlinedTextField(
-                            value = slot.sat,
-                            onValueChange = { editableSlots[idx] = slot.copy(sat = it.take(40)) },
-                            label = { Text("Sat") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
+                    OutlinedTextField(
+                        value = currentDaySubject,
+                        onValueChange = {
+                            editableSlots[idx] = SchoolCatalog.withSubjectForDay(slot, selectedDay, it.take(40))
+                        },
+                        label = { Text("$dayFullName Subject (leave blank if free/off)") },
+                        placeholder = { Text("e.g. Mathematics, Science, Computer, Break...") },
+                        singleLine = true,
+                        trailingIcon = if (currentDaySubject.isNotBlank()) {
+                            {
+                                IconButton(
+                                    onClick = {
+                                        editableSlots[idx] = SchoolCatalog.withSubjectForDay(slot, selectedDay, "")
+                                    }
+                                ) {
+                                    Icon(Icons.Filled.Clear, contentDescription = "Clear subject for $dayFullName")
+                                }
+                            }
+                        } else null,
+                        modifier = Modifier.fillMaxWidth().testTag("tt_slot_subject_${selectedDay.lowercase()}_$idx"),
+                    )
                 }
             }
         }
@@ -1608,12 +1819,6 @@ private fun TeacherTimetableEditorView(
                                     SchoolCatalog.TimetableSlot(
                                         period = "Period ${editableSlots.size + 1}",
                                         time = "01:10 - 01:50",
-                                        mon = "Self Study",
-                                        tue = "Self Study",
-                                        wed = "Self Study",
-                                        thu = "Self Study",
-                                        fri = "Self Study",
-                                        sat = "Club",
                                     )
                                 )
                             }
@@ -1647,7 +1852,7 @@ private fun TeacherTimetableEditorView(
                 ) {
                     Icon(Icons.Filled.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Save Timetable for $ttClass-$ttSection", fontWeight = FontWeight.Bold)
+                    Text("Save Fixed Weekly Timetable ($ttClass-$ttSection)", fontWeight = FontWeight.Bold)
                 }
             }
         }

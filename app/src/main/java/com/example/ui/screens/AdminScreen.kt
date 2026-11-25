@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.example.BuildConfig
 import com.example.data.model.*
+import com.example.ui.components.AdminStaffLeaveApprovalsCard
 import com.example.ui.components.AttachmentPickerChip
 import com.example.ui.components.AttachmentPreviewBlock
 import com.example.ui.components.PickedAttachment
@@ -55,6 +56,8 @@ fun AdminScreen(
     dptWeekly: List<DptWeekly>,
     termMarks: List<TermMarkCard>,
     attendance: List<AttendanceRecord>,
+    leaves: List<LeaveRequest> = emptyList(),
+    libraryIssues: List<LibraryIssue> = emptyList(),
     feeItems: List<FeeItem>,
     payments: List<FeePayment>,
     craftProjects: List<CraftProject> = emptyList(),
@@ -67,6 +70,9 @@ fun AdminScreen(
     onDeleteUser: (SchoolUser) -> Unit,
     onDeleteRecord: (collection: String, docId: String, label: String) -> Unit,
     onPostCircular: (Circular) -> Unit,
+    onUpdateLeaveStatus: (String, String, String) -> Unit = { _, _, _ -> },
+    onIssueBook: (LibraryIssue) -> Unit = {},
+    onReturnBook: (LibraryIssue) -> Unit = {},
     onPublishCampusPoster: (CampusPoster) -> Unit = {},
     onGenerateCraftAiImage: (String, String, String, String) -> Unit = { _, _, _, _ -> },
     onGenerateCustomAiImage: (String) -> Unit = {},
@@ -85,7 +91,24 @@ fun AdminScreen(
     val students = remember(users) { users.filter { it.role == "STUDENT" }.sortedBy { it.userId } }
     val teachers = remember(users) { users.filter { it.role == "TEACHER" } }
     val feeManagers = remember(users) { users.filter { it.role == "FEE_MANAGER" } }
+    val librarians = remember(users) { users.filter { it.role == "LIBRARIAN" } }
     var showStudentProgressDashboard by remember { mutableStateOf(false) }
+    var showLibraryDeskOverlay by remember { mutableStateOf(false) }
+
+    if (showLibraryDeskOverlay) {
+        BackHandler { showLibraryDeskOverlay = false }
+        LibraryManagementContent(
+            actor = adminUser,
+            allUsers = users,
+            libraryIssues = libraryIssues,
+            onIssueBook = onIssueBook,
+            onReturnBook = onReturnBook,
+            onDeleteLibraryIssue = { issue -> onDeleteRecord("libraryIssues", issue.id, issue.bookTitle) },
+            onBack = { showLibraryDeskOverlay = false },
+            modifier = modifier,
+        )
+        return
+    }
 
     if (showStudentProgressDashboard && students.isNotEmpty()) {
         BackHandler { showStudentProgressDashboard = false }
@@ -109,13 +132,18 @@ fun AdminScreen(
             students = students,
             teachers = teachers,
             feeManagers = feeManagers,
+            librarians = librarians,
             gateway = gateway,
             todayDpts = dptDaily.filter { it.date == today },
             dptWeekly = dptWeekly,
             todayAttendance = attendance.filter { it.date == today },
+            leaves = leaves,
+            libraryIssues = libraryIssues,
             feeItems = feeItems,
             payments = payments,
             campusPosters = campusPosters,
+            onUpdateLeaveStatus = onUpdateLeaveStatus,
+            onOpenLibraryDesk = { showLibraryDeskOverlay = true },
             onPublishCampusPoster = onPublishCampusPoster,
             onDeleteCampusPoster = { p -> onDeleteRecord("campusPosters", p.id, p.title) },
             onSaveGatewayConfig = onSaveGatewayConfig,
@@ -175,13 +203,18 @@ private fun AdminDashboardTab(
     students: List<SchoolUser>,
     teachers: List<SchoolUser>,
     feeManagers: List<SchoolUser>,
+    librarians: List<SchoolUser>,
     gateway: GatewayConfig,
     todayDpts: List<DptDaily>,
     dptWeekly: List<DptWeekly>,
     todayAttendance: List<AttendanceRecord>,
+    leaves: List<LeaveRequest>,
+    libraryIssues: List<LibraryIssue>,
     feeItems: List<FeeItem>,
     payments: List<FeePayment>,
     campusPosters: List<CampusPoster>,
+    onUpdateLeaveStatus: (String, String, String) -> Unit,
+    onOpenLibraryDesk: () -> Unit,
     onPublishCampusPoster: (CampusPoster) -> Unit,
     onDeleteCampusPoster: (CampusPoster) -> Unit,
     onSaveGatewayConfig: (GatewayConfig) -> Unit,
@@ -317,9 +350,9 @@ private fun AdminDashboardTab(
                     modifier = Modifier.weight(1f),
                 )
                 StatMetricCard(
-                    title = "Staff & Accounts",
-                    value = "${teachers.size + feeManagers.size}",
-                    subtitle = "${teachers.size} Teachers • ${feeManagers.size} Fee Mgr",
+                    title = "Staff & Library",
+                    value = "${teachers.size + feeManagers.size + librarians.size}",
+                    subtitle = "${teachers.size} Tch • ${feeManagers.size} Fee • ${librarians.size} Lib",
                     icon = Icons.Filled.Groups,
                     accentColor = IndigoAccent,
                     modifier = Modifier.weight(1f),
@@ -423,8 +456,25 @@ private fun AdminDashboardTab(
                             Text("Craft & Projects")
                         }
                     }
+                    val activeLibraryCount = libraryIssues.count { it.status != "RETURNED" }
+                    OutlinedButton(
+                        onClick = onOpenLibraryDesk,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("admin_open_library_desk_btn"),
+                    ) {
+                        Icon(Icons.Filled.LocalLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("School Library Register ($activeLibraryCount Issued / Not Returned)")
+                    }
                 }
             }
+        }
+
+        // Staff Leave Approvals (Teachers, Fee Managers & Librarians)
+        item {
+            AdminStaffLeaveApprovalsCard(
+                leaves = leaves,
+                onUpdateLeaveStatus = onUpdateLeaveStatus,
+            )
         }
 
         // Daily Campus Celebration / Event Poster Publisher & Live Gallery
@@ -1027,6 +1077,7 @@ private fun AdminAccountsTab(
                         listOf(
                             "STUDENT" to "Student",
                             "TEACHER" to "Teacher",
+                            "LIBRARIAN" to "Librarian",
                             "FEE_MANAGER" to "Fee Mgr",
                             "ADMIN" to "Principal / Admin",
                         ).forEach { (rKey, label) ->
@@ -1062,6 +1113,7 @@ private fun AdminAccountsTab(
                                 leadingIcon = { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp)) },
                             )
                             listOf(
+                                "LIBRARIAN" to "Librarian",
                                 "FEE_MANAGER" to "Fee Manager",
                                 "ADMIN" to "Principal / Admin",
                             ).forEach { (extraKey, extraLabel) ->
@@ -1098,6 +1150,7 @@ private fun AdminAccountsTab(
                                     when (selectedRole) {
                                         "STUDENT" -> "Roll / Adm No (Auto)"
                                         "TEACHER" -> "Employee ID"
+                                        "LIBRARIAN" -> "Librarian ID"
                                         "ADMIN" -> "Admin ID"
                                         else -> "Staff ID"
                                     }
@@ -1250,6 +1303,7 @@ private fun AdminAccountsTab(
                             if (fullName.isBlank() || userId.isBlank() || password.isBlank()) return@Button
                             val wing = when (selectedRole) {
                                 "FEE_MANAGER" -> "Accounts Office"
+                                "LIBRARIAN" -> "School Library"
                                 "ADMIN" -> "All Wings"
                                 else -> SchoolCatalog.wingForClass(className)
                             }
@@ -1266,10 +1320,11 @@ private fun AdminAccountsTab(
                                     fullName = fullName.trim(),
                                     phone = phone.trim(),
                                     wing = wing,
-                                    className = if (selectedRole == "FEE_MANAGER" || selectedRole == "ADMIN") "" else className,
-                                    section = if (selectedRole == "FEE_MANAGER" || selectedRole == "ADMIN") "" else section,
+                                    className = if (selectedRole == "FEE_MANAGER" || selectedRole == "LIBRARIAN" || selectedRole == "ADMIN") "" else className,
+                                    section = if (selectedRole == "FEE_MANAGER" || selectedRole == "LIBRARIAN" || selectedRole == "ADMIN") "" else section,
                                     subject = when (selectedRole) {
                                         "TEACHER" -> subject.trim()
+                                        "LIBRARIAN" -> "Library"
                                         "ADMIN" -> "Administration"
                                         else -> ""
                                     },
@@ -1308,7 +1363,14 @@ private fun AdminAccountsTab(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                 ) {
-                    listOf("ALL" to "All", "STUDENT" to "Students", "TEACHER" to "Teachers", "FEE_MANAGER" to "Fee Managers", "ADMIN" to "Admins")
+                    listOf(
+                        "ALL" to "All",
+                        "STUDENT" to "Students",
+                        "TEACHER" to "Teachers",
+                        "LIBRARIAN" to "Librarians",
+                        "FEE_MANAGER" to "Fee Managers",
+                        "ADMIN" to "Admins",
+                    )
                         .forEach { (key, label) ->
                             FilterChip(
                                 selected = filterRole == key,

@@ -299,15 +299,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v1.3.1.${{ github.run_number }}.${{ github.run_attempt }}
-          name: "Doon Public School, Etah ERP v1.3.1.${{ github.run_number }}"
+          tag_name: v1.5.${{ github.run_number }}.${{ github.run_attempt }}
+          name: "Doon Public School, Etah ERP v1.5.${{ github.run_number }}"
           body: |
-            ### Doon Public School, Etah — Official Android App v1.3.1 (APK)
-            **What's New in v1.3.1:**
-            - Built-in automatic Cloudflare Edge connection (no URL entry required on first launch).
-            - New Teacher **Daily Practice Tests** dashboard with deadlines, subjects, filters, and one-tap completion.
-            - Admin **Newspaper** can now broadcast to **All Teachers** or message an **Individual Teacher** directly.
-            - Multi-turn **Doon AI Assistant** and **AI Image Creator & Editor** in Craft & Project Studio.
+            ### Doon Public School, Etah — Official Android App v1.5 (APK)
+            **What's New in v1.5:**
+            - **Instant Multi-Account Switcher (`Add Account`):** Save multiple profiles on the same device or browser and switch between them instantly without re-entering credentials.
+            - **School Library Management (Librarian Role + Teacher Access):** Dedicated Librarian portal and Teacher Library access to issue books to anyone (students or staff), track Not Returned & Overdue books, and mark returns in 1 tap.
+            - **Smart Leave Routing:** Student leave applications route to Class Teachers; Teacher, Fee Manager, and Librarian leaves route directly to the Principal / Admin for approval.
+            - **Editable Day-by-Day Fixed Weekly Timetable (Mon–Sun):** Teachers edit each weekday independently (leaving off days blank) and the fixed schedule repeats across weeks and years.
+            - **Automatic Parent Absence Notice:** Marking a student Absent automatically sends a Parent Absence Alert banner, Android notification, and optional SMS shortcut.
 
             **How to Install:**
             1. Scroll down to **Assets** and tap **`DoonPublicSchool-Etah.apk`** directly (do not download Source code `.zip`).

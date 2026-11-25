@@ -1,9 +1,13 @@
 package com.example.ui.screens
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -57,6 +61,7 @@ fun StudentScreen(
     payments: List<FeePayment>,
     doubts: List<DoubtMessage>,
     timetables: List<ClassTimetable> = emptyList(),
+    libraryIssues: List<LibraryIssue> = emptyList(),
     campusPosters: List<CampusPoster> = emptyList(),
     craftProjects: List<CraftProject> = emptyList(),
     likedProjectIds: Set<String> = emptySet(),
@@ -175,6 +180,9 @@ fun StudentScreen(
             leaves = leaves.filter { it.studentDocId == student.id },
             doubts = doubts.filter { it.studentDocId == student.id },
             timetables = timetables,
+            libraryIssues = libraryIssues.filter {
+                it.borrowerDocId == student.id || it.borrowerUserId.equals(student.userId, ignoreCase = true)
+            },
             onSubmitLeave = onSubmitLeave,
             onSubmitDoubt = onSubmitDoubt,
             modifier = modifier,
@@ -418,10 +426,50 @@ private fun StudentHomeTab(
     onShowMessage: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     val today = remember { SchoolCatalog.todayIso() }
     val todayDpts = remember(dptDaily, today) { dptDaily.filter { it.date == today } }
     val presentCount = attendance.count { it.status == "Present" }
     val attPct = if (attendance.isNotEmpty()) (presentCount * 100) / attendance.size else 100
+
+    val todayAbsenceRecord = remember(attendance, today) {
+        attendance.firstOrNull { it.date == today && it.status.equals("Absent", ignoreCase = true) }
+    }
+    val todayAbsenceCircular = remember(circulars, today, student.id) {
+        circulars.firstOrNull {
+            it.category.equals("Absence Alert", ignoreCase = true) &&
+                it.date == today &&
+                (it.recipientDocId == student.id || it.recipientDocId.isBlank())
+        }
+    }
+    val isAbsentToday = todayAbsenceRecord != null || todayAbsenceCircular != null
+    var hasNotifPermission by remember { mutableStateOf(AbsenceNotificationHelper.hasNotificationPermission(context)) }
+    val notifPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasNotifPermission = granted
+        if (granted && isAbsentToday) {
+            AbsenceNotificationHelper.notifyAbsenceIfUnseen(
+                context = context,
+                studentDocId = student.id,
+                studentName = student.fullName,
+                date = today,
+                markedBy = todayAbsenceRecord?.markedBy ?: todayAbsenceCircular?.postedBy.orEmpty(),
+            )
+        }
+    }
+
+    LaunchedEffect(isAbsentToday, hasNotifPermission, today, student.id) {
+        if (isAbsentToday && hasNotifPermission) {
+            AbsenceNotificationHelper.notifyAbsenceIfUnseen(
+                context = context,
+                studentDocId = student.id,
+                studentName = student.fullName,
+                date = today,
+                markedBy = todayAbsenceRecord?.markedBy ?: todayAbsenceCircular?.postedBy.orEmpty(),
+            )
+        }
+    }
 
     val pendingFeeTotal = feeItems.filter { it.status != "PAID" }.sumOf { it.amount }
     val latestWeek = SchoolCatalog.dptWeeks[1]
@@ -485,6 +533,66 @@ private fun StudentHomeTab(
                             Icon(Icons.Filled.Edit, contentDescription = "Edit Profile", tint = GoldAmber, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Edit Phone / PW", color = GoldAmber)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Urgent Parent Absence Alert Banner when Student is marked Absent today
+        if (isAbsentToday) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = RoseContainer),
+                    border = BorderStroke(1.5.dp, RoseError),
+                    modifier = Modifier.fillMaxWidth().testTag("parent_absence_alert_banner"),
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(Icons.Filled.WarningAmber, contentDescription = "Absence Alert", tint = RoseError, modifier = Modifier.size(22.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "PARENT ABSENCE NOTICE ($today)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = RoseError,
+                                )
+                                Text(
+                                    "${student.fullName} was marked ABSENT today",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = NavyDeep,
+                                )
+                            }
+                        }
+                        Text(
+                            text = todayAbsenceCircular?.content
+                                ?: "Dear ${student.parentName.ifBlank { "Parent / Guardian" }}, your ward ${student.fullName} (${student.className}-${student.section}) was marked ABSENT on $today. Please submit a leave application to the class teacher if this was planned or due to illness.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NavyDeep,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            Button(
+                                onClick = onGoToAcademics,
+                                colors = ButtonDefaults.buttonColors(containerColor = RoseError, contentColor = Color.White),
+                                modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("absence_banner_apply_leave_btn"),
+                            ) {
+                                Icon(Icons.Filled.EventNote, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Submit Leave Application")
+                            }
+                            if (!hasNotifPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                OutlinedButton(
+                                    onClick = { notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                ) {
+                                    Text("Enable Alerts", color = NavyDeep)
+                                }
+                            }
                         }
                     }
                 }
@@ -1425,6 +1533,7 @@ private fun StudentAcademicsTab(
     leaves: List<LeaveRequest>,
     doubts: List<DoubtMessage>,
     timetables: List<ClassTimetable>,
+    libraryIssues: List<LibraryIssue> = emptyList(),
     onSubmitLeave: (LeaveRequest) -> Unit,
     onSubmitDoubt: (DoubtMessage) -> Unit,
     modifier: Modifier = Modifier,
@@ -1447,14 +1556,77 @@ private fun StudentAcademicsTab(
         customTimetable?.slots?.map { SchoolCatalog.slotFromMap(it) }?.takeIf { it.isNotEmpty() }
             ?: SchoolCatalog.defaultTimetableSlotsFor(student.className, student.section)
     }
-    var selectedDay by remember { mutableStateOf("Mon") }
-    val dayChips = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Full Week")
+    var selectedDay by remember { mutableStateOf(SchoolCatalog.todayShortDay()) }
+    val dayChips = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Full Week")
+    val todayIso = remember { SchoolCatalog.todayIso() }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (libraryIssues.isNotEmpty()) {
+            item {
+                Text(
+                    "MY ISSUED LIBRARY BOOKS (${libraryIssues.count { it.status != "RETURNED" }} NOT RETURNED)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            items(libraryIssues, key = { "stu_lib_${it.id}" }) { issue ->
+                val isReturned = issue.status.equals("RETURNED", ignoreCase = true)
+                val isOverdue = !isReturned && issue.dueDate.isNotBlank() && issue.dueDate < todayIso
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(
+                        1.dp,
+                        when {
+                            isReturned -> EmeraldSuccess.copy(alpha = 0.4f)
+                            isOverdue -> RoseError
+                            else -> GoldAmber
+                        }
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(issue.bookTitle, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                            Surface(
+                                color = when {
+                                    isReturned -> EmeraldContainer
+                                    isOverdue -> RoseContainer
+                                    else -> GoldSoft
+                                },
+                                shape = RoundedCornerShape(6.dp),
+                            ) {
+                                Text(
+                                    when {
+                                        isReturned -> "RETURNED"
+                                        isOverdue -> "OVERDUE"
+                                        else -> "ISSUED"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isOverdue) RoseError else NavyDeep,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
+                        Text(
+                            "Issued: ${issue.issueDate} • Due: ${issue.dueDate}${if (issue.bookCode.isNotBlank()) " • Code: ${issue.bookCode}" else ""}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isOverdue) RoseError else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+
         item {
             Text("HOMEWORK DIARY (${student.className}-${student.section})", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -1485,11 +1657,11 @@ private fun StudentAcademicsTab(
             }
         }
 
-        // Per-Class-Section Timetable
+        // Per-Class-Section Fixed Weekly Timetable (Mon-Sun)
         item {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 6.dp)) {
                 Text(
-                    "${student.className}-${student.section} TIMETABLE",
+                    "${student.className}-${student.section} FIXED WEEKLY TIMETABLE",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1500,13 +1672,14 @@ private fun StudentAcademicsTab(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (customTimetable != null && customTimetable.updatedBy.isNotBlank()) {
-                            Text(
-                                "Updated by ${customTimetable.updatedBy}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = EmeraldSuccess,
-                            )
-                        }
+                        Text(
+                            if (customTimetable != null && customTimetable.updatedBy.isNotBlank())
+                                "Fixed Weekly Schedule • Updated by ${customTimetable.updatedBy}"
+                            else
+                                "Fixed Weekly Schedule • Same every week across the year",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = EmeraldSuccess,
+                        )
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -1520,43 +1693,59 @@ private fun StudentAcademicsTab(
                             }
                         }
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-                        timetableSlots.forEachIndexed { idx, slot ->
-                            val daySubject = when (selectedDay) {
-                                "Mon" -> slot.mon
-                                "Tue" -> slot.tue
-                                "Wed" -> slot.wed
-                                "Thu" -> slot.thu
-                                "Fri" -> slot.fri
-                                "Sat" -> slot.sat
-                                else -> "Mon: ${slot.mon} • Tue: ${slot.tue} • Wed: ${slot.wed} • Thu: ${slot.thu} • Fri: ${slot.fri} • Sat: ${slot.sat}"
-                            }
-                            if (selectedDay == "Full Week") {
-                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text("${slot.period} (${slot.time})", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                                    Text(daySubject, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            } else {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(slot.period, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                                        Text(slot.time, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                    Surface(color = GoldSoft, shape = RoundedCornerShape(8.dp)) {
+                        val visibleSlots = if (selectedDay == "Full Week") {
+                            timetableSlots
+                        } else {
+                            timetableSlots.filter { SchoolCatalog.subjectForDay(it, selectedDay).isNotBlank() }
+                        }
+                        if (visibleSlots.isEmpty()) {
+                            Text(
+                                "No classes scheduled for $selectedDay.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 8.dp),
+                            )
+                        } else {
+                            visibleSlots.forEachIndexed { idx, slot ->
+                                if (selectedDay == "Full Week") {
+                                    val weekSummary = SchoolCatalog.weekDays
+                                        .mapNotNull { d ->
+                                            val subj = SchoolCatalog.subjectForDay(slot, d).trim()
+                                            if (subj.isNotBlank()) "$d: $subj" else null
+                                        }
+                                        .joinToString(" • ")
+                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Text("${slot.period} (${slot.time})", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
                                         Text(
-                                            daySubject,
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = NavyDeep,
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                            weekSummary.ifBlank { "No classes assigned" },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
                                     }
+                                } else {
+                                    val daySubject = SchoolCatalog.subjectForDay(slot, selectedDay)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(slot.period, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                                            Text(slot.time, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                        Surface(color = GoldSoft, shape = RoundedCornerShape(8.dp)) {
+                                            Text(
+                                                daySubject,
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = NavyDeep,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                            )
+                                        }
+                                    }
                                 }
-                            }
-                            if (idx < timetableSlots.lastIndex) {
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                                if (idx < visibleSlots.lastIndex) {
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                                }
                             }
                         }
                     }

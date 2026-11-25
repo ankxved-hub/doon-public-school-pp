@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
 import com.example.data.model.*
 import com.example.data.model.SchoolCatalog.toSlotMap
+import com.example.data.preferences.SavedAccountEntry
 import com.example.data.preferences.SavedRoleSession
 import com.example.data.preferences.ThemePreferences
 import com.example.data.remote.CloudflareApiClient
@@ -181,6 +182,7 @@ class SchoolViewModel(
     val craftLikesState: StateFlow<DataUiState<List<CraftLike>>> = observeStateFlow("craftLikes", { it.craftLikes }) { repository.observeCraftLikes() }
     val campusPostersState: StateFlow<DataUiState<List<CampusPoster>>> = observeStateFlow("campusPosters", { it.campusPosters }) { repository.observeCampusPosters() }
     val timetablesState: StateFlow<DataUiState<List<ClassTimetable>>> = observeStateFlow("timetables", { it.timetables }) { repository.observeTimetables() }
+    val libraryIssuesState: StateFlow<DataUiState<List<LibraryIssue>>> = observeStateFlow("libraryIssues", { it.libraryIssues }) { repository.observeLibraryIssues() }
 
     private val _toastMessage = MutableStateFlow<String?>(null)
     val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
@@ -242,6 +244,13 @@ class SchoolViewModel(
                 }
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), null)
         }
+
+    val savedAccounts: StateFlow<List<SavedAccountEntry>> =
+        sessionPrefs.savedAccounts(ownerUid)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), emptyList())
+
+    private val _isSwitchingAccount = MutableStateFlow(false)
+    val isSwitchingAccount: StateFlow<Boolean> = _isSwitchingAccount.asStateFlow()
 
     val isRestoringSavedSession: StateFlow<Boolean> =
         combine(sessionRestoreState, usersState, _isSeeding, _isMemberReady) { restoreState, usersUi, seeding, memberReady ->
@@ -340,8 +349,13 @@ class SchoolViewModel(
                     _cfToken.value = saved.cloudflareToken
                     val dashRes = refreshCloudflareDashboard(saved.cloudflareToken)
                     if (dashRes.isSuccess) {
-                        _activeSchoolUserDocId.value = dashRes.getOrThrow().currentUser.id
+                        val restoredUser = dashRes.getOrThrow().currentUser
+                        _activeSchoolUserDocId.value = restoredUser.id
                         _isMemberReady.value = true
+                        sessionPrefs.upsertSavedAccount(
+                            entry = toSavedAccountEntry(restoredUser, cloudflareToken = saved.cloudflareToken),
+                            makeActive = false,
+                        )
                     } else {
                         _cfToken.value = null
                         _isMemberReady.value = false
@@ -457,6 +471,28 @@ class SchoolViewModel(
         _toastMessage.value = msg
     }
 
+    private fun toSavedAccountEntry(
+        user: SchoolUser,
+        cloudflareToken: String = "",
+        loginTicketId: String = "",
+    ): SavedAccountEntry {
+        val classMeta = when {
+            user.className.isNotBlank() -> "${user.className}-${user.section}".trimEnd('-')
+            user.subject.isNotBlank() -> user.subject
+            else -> user.wing
+        }
+        return SavedAccountEntry(
+            ownerUid = ownerUid,
+            docId = user.id,
+            userId = user.userId.trim(),
+            fullName = user.fullName.ifBlank { user.userId.trim() },
+            role = user.role,
+            classInfo = classMeta,
+            cloudflareToken = cloudflareToken,
+            loginTicketId = loginTicketId,
+        )
+    }
+
     suspend fun claimCloudflareAdmin(
         fullName: String,
         userId: String,
@@ -471,14 +507,12 @@ class SchoolViewModel(
             onSuccess = { session ->
                 _cfToken.value = session.token
                 _needsCloudflareAdminSetup.value = false
-                refreshCloudflareDashboard(session.token)
-                _activeSchoolUserDocId.value = session.user.id
-                sessionPrefs.saveRoleSession(
-                    ownerUid = ownerUid,
-                    docId = session.user.id,
-                    userId = session.user.userId.trim(),
-                    role = session.user.role,
-                    cloudflareToken = session.token,
+                val dashRes = refreshCloudflareDashboard(session.token)
+                val resolvedUser = dashRes.getOrNull()?.currentUser ?: session.user
+                _activeSchoolUserDocId.value = resolvedUser.id
+                sessionPrefs.upsertSavedAccount(
+                    entry = toSavedAccountEntry(resolvedUser, cloudflareToken = session.token),
+                    makeActive = true,
                 )
                 _isMemberReady.value = true
                 null
@@ -502,13 +536,11 @@ class SchoolViewModel(
                     if (dashRes.isFailure) {
                         return dashRes.exceptionOrNull()?.localizedMessage ?: "Signed in, but failed to load dashboard."
                     }
-                    _activeSchoolUserDocId.value = session.user.id
-                    sessionPrefs.saveRoleSession(
-                        ownerUid = ownerUid,
-                        docId = session.user.id,
-                        userId = session.user.userId.trim(),
-                        role = session.user.role,
-                        cloudflareToken = session.token,
+                    val resolvedUser = dashRes.getOrThrow().currentUser
+                    _activeSchoolUserDocId.value = resolvedUser.id
+                    sessionPrefs.upsertSavedAccount(
+                        entry = toSavedAccountEntry(resolvedUser, cloudflareToken = session.token),
+                        makeActive = true,
                     )
                     _isMemberReady.value = true
                     null
@@ -522,13 +554,12 @@ class SchoolViewModel(
         val result = repository.loginWithCredentials(role, cleanId, cleanPw)
         return result.fold(
             onSuccess = { matchedUser ->
+                val ticketId = repository.buildLoginTicketId(matchedUser.role, cleanId, cleanPw)
                 _activeSchoolUserDocId.value = matchedUser.id
                 _activeRoleOverride.value = matchedUser.role
-                sessionPrefs.saveRoleSession(
-                    ownerUid = ownerUid,
-                    docId = matchedUser.id,
-                    userId = matchedUser.userId.trim(),
-                    role = matchedUser.role,
+                sessionPrefs.upsertSavedAccount(
+                    entry = toSavedAccountEntry(matchedUser, loginTicketId = ticketId),
+                    makeActive = true,
                 )
                 _isMemberReady.value = true
                 _syncGeneration.value += 1
@@ -541,6 +572,98 @@ class SchoolViewModel(
         )
     }
 
+    fun switchToSavedAccount(
+        account: SavedAccountEntry,
+        onCompleted: (Boolean) -> Unit = {},
+    ) {
+        if (_isSwitchingAccount.value) return
+        val current = activeSchoolUser.value
+        if (current != null &&
+            ((account.docId.isNotBlank() && account.docId == current.id) ||
+                (account.userId.equals(current.userId, ignoreCase = true) && account.role == current.role))
+        ) {
+            onCompleted(true)
+            return
+        }
+
+        viewModelScope.launch {
+            _isSwitchingAccount.value = true
+            try {
+                if (isCloudflareMode) {
+                    if (account.cloudflareToken.isBlank()) {
+                        _toastMessage.value = "Session expired for ${account.fullName}. Please sign in once."
+                        onCompleted(false)
+                        return@launch
+                    }
+                    val dashRes = refreshCloudflareDashboard(account.cloudflareToken)
+                    if (dashRes.isSuccess) {
+                        val loaded = dashRes.getOrThrow().currentUser
+                        _cfToken.value = account.cloudflareToken
+                        _activeSchoolUserDocId.value = loaded.id
+                        _isMemberReady.value = true
+                        sessionPrefs.upsertSavedAccount(
+                            entry = toSavedAccountEntry(loaded, cloudflareToken = account.cloudflareToken),
+                            makeActive = true,
+                        )
+                        _toastMessage.value = "Switched to ${loaded.fullName} (${loaded.role.replace('_', ' ')})"
+                        onCompleted(true)
+                    } else {
+                        _toastMessage.value = "Session expired for ${account.fullName}. Please sign in again."
+                        onCompleted(false)
+                    }
+                } else {
+                    if (account.loginTicketId.isBlank()) {
+                        _toastMessage.value = "Saved session expired for ${account.fullName}. Please sign in once."
+                        onCompleted(false)
+                        return@launch
+                    }
+                    val res = repository.loginWithSavedTicket(account.loginTicketId)
+                    res.fold(
+                        onSuccess = { loaded ->
+                            _activeSchoolUserDocId.value = loaded.id
+                            _activeRoleOverride.value = loaded.role
+                            sessionPrefs.upsertSavedAccount(
+                                entry = toSavedAccountEntry(loaded, loginTicketId = account.loginTicketId),
+                                makeActive = true,
+                            )
+                            _isMemberReady.value = true
+                            _syncGeneration.value += 1
+                            _toastMessage.value = "Switched to ${loaded.fullName} (${loaded.role.replace('_', ' ')})"
+                            onCompleted(true)
+                        },
+                        onFailure = { e ->
+                            _toastMessage.value = e.localizedMessage ?: "Saved session expired for ${account.fullName}. Please sign in again."
+                            onCompleted(false)
+                        },
+                    )
+                }
+            } finally {
+                _isSwitchingAccount.value = false
+            }
+        }
+    }
+
+    fun removeSavedAccount(account: SavedAccountEntry) {
+        viewModelScope.launch {
+            val isRemovingActive = activeSchoolUser.value?.let { active ->
+                (account.docId.isNotBlank() && active.id == account.docId) ||
+                    active.userId.equals(account.userId, ignoreCase = true)
+            } == true
+            sessionPrefs.removeSavedAccount(ownerUid, account.docId, account.userId)
+            if (isRemovingActive) {
+                _activeSchoolUserDocId.value = null
+                _activeRoleOverride.value = null
+                _isMemberReady.value = false
+                _cfToken.value = null
+                _cfDashboard.value = null
+                if (!isCloudflareMode) {
+                    repository.clearCurrentMemberSession()
+                }
+            }
+            _toastMessage.value = "Removed ${account.fullName} from saved accounts on this device."
+        }
+    }
+
     fun switchActiveRole(targetRole: String) {
         val current = activeSchoolUser.value ?: return
         if (targetRole == current.role || targetRole !in current.effectiveRoles()) return
@@ -550,13 +673,11 @@ class SchoolViewModel(
                 CloudflareApiClient.switchRole(tok, targetRole)
                     .onSuccess { session ->
                         _cfToken.value = session.token
-                        refreshCloudflareDashboard(session.token)
-                        sessionPrefs.saveRoleSession(
-                            ownerUid = ownerUid,
-                            docId = session.user.id,
-                            userId = session.user.userId.trim(),
-                            role = session.user.role,
-                            cloudflareToken = session.token,
+                        val dashRes = refreshCloudflareDashboard(session.token)
+                        val resolved = dashRes.getOrNull()?.currentUser ?: session.user
+                        sessionPrefs.upsertSavedAccount(
+                            entry = toSavedAccountEntry(resolved, cloudflareToken = session.token),
+                            makeActive = true,
                         )
                         _toastMessage.value = "Switched portal to ${targetRole.replace('_', ' ')}!"
                     }
@@ -565,11 +686,10 @@ class SchoolViewModel(
                 repository.switchActiveMemberRole(current, targetRole)
                     .onSuccess { updated ->
                         _activeRoleOverride.value = updated.role
-                        sessionPrefs.saveRoleSession(
-                            ownerUid = ownerUid,
-                            docId = updated.id,
-                            userId = updated.userId.trim(),
-                            role = updated.role,
+                        val ticketId = repository.buildLoginTicketId(updated.role, updated.userId, updated.password)
+                        sessionPrefs.upsertSavedAccount(
+                            entry = toSavedAccountEntry(updated, loginTicketId = ticketId),
+                            makeActive = true,
                         )
                         _toastMessage.value = "Switched portal to ${targetRole.replace('_', ' ')}!"
                     }
@@ -603,7 +723,13 @@ class SchoolViewModel(
             viewModelScope.launch {
                 CloudflareApiClient.updateProfile(tok, newFullName, newPhone, newPassword)
                     .onSuccess {
-                        refreshCloudflareDashboard(tok)
+                        val dashRes = refreshCloudflareDashboard(tok)
+                        dashRes.getOrNull()?.currentUser?.let { updated ->
+                            sessionPrefs.upsertSavedAccount(
+                                entry = toSavedAccountEntry(updated, cloudflareToken = tok),
+                                makeActive = true,
+                            )
+                        }
                         _toastMessage.value = "Name, phone number & password updated successfully!"
                     }
                     .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to update profile." }
@@ -848,14 +974,35 @@ class SchoolViewModel(
 
     fun markStudentAttendance(record: AttendanceRecord) {
         viewModelScope.launch {
+            val actor = activeSchoolUser.value
+            val student = (usersState.value as? DataUiState.Success)?.data?.firstOrNull { it.id == record.studentDocId }
             if (isCloudflareMode) {
                 val tok = _cfToken.value ?: return@launch
                 CloudflareApiClient.saveAttendanceBatch(tok, listOf(record))
-                    .onSuccess { refreshCloudflareDashboard(tok) }
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        if (record.status == "Absent") {
+                            val nameLabel = student?.fullName ?: "Student"
+                            _toastMessage.value = "Marked Absent & Parent Absence Notice sent for $nameLabel!"
+                        }
+                    }
                     .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to mark attendance." }
                 return@launch
             }
             repository.markAttendance(record)
+                .onSuccess {
+                    if (record.status == "Absent" && student != null) {
+                        repository.upsertAbsenceNoticeForStudent(
+                            student = student,
+                            date = record.date,
+                            markedByName = actor?.fullName ?: record.markedBy,
+                            senderRole = actor?.role ?: "TEACHER",
+                        )
+                        _toastMessage.value = "Marked Absent & Parent Absence Notice sent for ${student.fullName}!"
+                    } else if (record.status == "Present") {
+                        repository.removeAbsenceNoticeForStudent(record.studentDocId, record.date)
+                    }
+                }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to mark attendance." }
         }
     }
@@ -1285,19 +1432,74 @@ class SchoolViewModel(
 
     fun submitLeave(leave: LeaveRequest) {
         viewModelScope.launch {
+            val actor = activeSchoolUser.value
+            val resolvedRole = leave.applicantRole.ifBlank { actor?.role ?: "STUDENT" }
+            val resolvedTarget = if (resolvedRole == "STUDENT") "TEACHER" else "ADMIN"
+            val normalizedLeave = leave.copy(
+                applicantRole = resolvedRole,
+                targetRole = resolvedTarget,
+                className = leave.className.ifBlank { resolvedRole.replace('_', ' ') },
+            )
+            val destinationLabel = if (resolvedTarget == "ADMIN") "Principal / Admin" else "Class Teacher"
             if (isCloudflareMode) {
                 val tok = _cfToken.value ?: return@launch
-                CloudflareApiClient.submitLeave(tok, leave)
+                CloudflareApiClient.submitLeave(tok, normalizedLeave)
                     .onSuccess {
                         refreshCloudflareDashboard(tok)
-                        _toastMessage.value = "Leave application sent to Class Teacher!"
+                        _toastMessage.value = "Leave application sent to $destinationLabel!"
                     }
                     .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to submit leave." }
                 return@launch
             }
-            repository.submitLeave(leave)
-                .onSuccess { _toastMessage.value = "Leave application sent to Class Teacher!" }
+            repository.submitLeave(normalizedLeave)
+                .onSuccess { _toastMessage.value = "Leave application sent to $destinationLabel!" }
                 .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to submit leave." }
+        }
+    }
+
+    // --- Library Management (Librarian, Teacher, Admin) ---
+
+    fun issueLibraryBook(issue: LibraryIssue) {
+        viewModelScope.launch {
+            val actor = activeSchoolUser.value
+            val prepared = issue.copy(
+                issueDate = issue.issueDate.ifBlank { SchoolCatalog.todayIso() },
+                dueDate = issue.dueDate.ifBlank { SchoolCatalog.isoDaysFromToday(14) },
+                issuedBy = issue.issuedBy.ifBlank { actor?.fullName ?: "Librarian" },
+                status = "ISSUED",
+                returnedDate = "",
+            )
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.issueLibraryBook(tok, prepared)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Book '${prepared.bookTitle}' issued to ${prepared.borrowerName}!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to issue book." }
+                return@launch
+            }
+            repository.issueLibraryBook(prepared)
+                .onSuccess { _toastMessage.value = "Book '${prepared.bookTitle}' issued to ${prepared.borrowerName}!" }
+                .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to issue book." }
+        }
+    }
+
+    fun returnLibraryBook(issue: LibraryIssue) {
+        viewModelScope.launch {
+            if (isCloudflareMode) {
+                val tok = _cfToken.value ?: return@launch
+                CloudflareApiClient.returnLibraryBook(tok, issue.id)
+                    .onSuccess {
+                        refreshCloudflareDashboard(tok)
+                        _toastMessage.value = "Marked '${issue.bookTitle}' returned by ${issue.borrowerName}!"
+                    }
+                    .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to mark book returned." }
+                return@launch
+            }
+            repository.returnLibraryBook(issue.id)
+                .onSuccess { _toastMessage.value = "Marked '${issue.bookTitle}' returned by ${issue.borrowerName}!" }
+                .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to mark book returned." }
         }
     }
 

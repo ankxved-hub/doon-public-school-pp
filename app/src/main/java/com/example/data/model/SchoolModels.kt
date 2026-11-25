@@ -172,13 +172,51 @@ object SchoolCatalog {
     data class TimetableSlot(
         val period: String,
         val time: String,
-        val mon: String,
-        val tue: String,
-        val wed: String,
-        val thu: String,
-        val fri: String,
-        val sat: String,
+        val mon: String = "",
+        val tue: String = "",
+        val wed: String = "",
+        val thu: String = "",
+        val fri: String = "",
+        val sat: String = "",
+        val sun: String = "",
     )
+
+    val weekDays: List<String> = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+    fun subjectForDay(slot: TimetableSlot, dayKey: String): String = when (dayKey.lowercase(Locale.US)) {
+        "mon", "monday" -> slot.mon
+        "tue", "tuesday" -> slot.tue
+        "wed", "wednesday" -> slot.wed
+        "thu", "thursday" -> slot.thu
+        "fri", "friday" -> slot.fri
+        "sat", "saturday" -> slot.sat
+        "sun", "sunday" -> slot.sun
+        else -> ""
+    }
+
+    fun withSubjectForDay(slot: TimetableSlot, dayKey: String, value: String): TimetableSlot = when (dayKey.lowercase(Locale.US)) {
+        "mon", "monday" -> slot.copy(mon = value)
+        "tue", "tuesday" -> slot.copy(tue = value)
+        "wed", "wednesday" -> slot.copy(wed = value)
+        "thu", "thursday" -> slot.copy(thu = value)
+        "fri", "friday" -> slot.copy(fri = value)
+        "sat", "saturday" -> slot.copy(sat = value)
+        "sun", "sunday" -> slot.copy(sun = value)
+        else -> slot
+    }
+
+    fun todayShortDay(): String {
+        val cal = java.util.Calendar.getInstance()
+        return when (cal.get(java.util.Calendar.DAY_OF_WEEK)) {
+            java.util.Calendar.MONDAY -> "Mon"
+            java.util.Calendar.TUESDAY -> "Tue"
+            java.util.Calendar.WEDNESDAY -> "Wed"
+            java.util.Calendar.THURSDAY -> "Thu"
+            java.util.Calendar.FRIDAY -> "Fri"
+            java.util.Calendar.SATURDAY -> "Sat"
+            else -> "Sun"
+        }
+    }
 
     fun TimetableSlot.toSlotMap(): Map<String, String> = mapOf(
         "period" to period,
@@ -189,6 +227,7 @@ object SchoolCatalog {
         "thu" to thu,
         "fri" to fri,
         "sat" to sat,
+        "sun" to sun,
     )
 
     fun slotFromMap(map: Map<String, String>): TimetableSlot = TimetableSlot(
@@ -200,6 +239,7 @@ object SchoolCatalog {
         thu = map["thu"].orEmpty(),
         fri = map["fri"].orEmpty(),
         sat = map["sat"].orEmpty(),
+        sun = map["sun"].orEmpty(),
     )
 
     fun defaultTimetableSlotsFor(className: String, section: String): List<TimetableSlot> {
@@ -249,13 +289,19 @@ object SchoolCatalog {
     val standardTimetable = defaultTimetableSlotsFor("Class X", "A")
 
     fun todayIso(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+
+    fun isoDaysFromToday(days: Int): String {
+        val cal = java.util.Calendar.getInstance()
+        cal.add(java.util.Calendar.DAY_OF_YEAR, days)
+        return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(cal.time)
+    }
 }
 
 @IgnoreExtraProperties
 data class SchoolUser(
     @DocumentId val id: String = "",
     val ownerUid: String = "",
-    val role: String = "STUDENT", // ADMIN | TEACHER | FEE_MANAGER | STUDENT
+    val role: String = "STUDENT", // ADMIN | TEACHER | FEE_MANAGER | LIBRARIAN | STUDENT
     val primaryRole: String = "",
     val roles: List<String> = emptyList(),
     val extraRoles: List<String> = emptyList(),
@@ -278,7 +324,7 @@ fun SchoolUser.effectiveRoles(): List<String> {
     val base = primaryRole.ifBlank { role }
     return (listOf(base) + roles + extraRoles)
         .map { it.trim().uppercase(Locale.US) }
-        .filter { it in setOf("ADMIN", "TEACHER", "FEE_MANAGER", "STUDENT") }
+        .filter { it in setOf("ADMIN", "TEACHER", "FEE_MANAGER", "LIBRARIAN", "STUDENT") }
         .distinct()
         .ifEmpty { listOf(role) }
 }
@@ -389,6 +435,8 @@ data class LeaveRequest(
     val admissionNo: String = "",
     val className: String = "",
     val section: String = "",
+    val applicantRole: String = "STUDENT", // STUDENT | TEACHER | FEE_MANAGER | LIBRARIAN
+    val targetRole: String = "TEACHER", // TEACHER (for students) | ADMIN (for staff)
     val fromDate: String = "",
     val toDate: String = "",
     val reason: String = "",
@@ -536,6 +584,28 @@ data class CraftLike(
     val ownerUid: String = "",
     val projectId: String = "",
     val likerId: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class LibraryIssue(
+    @DocumentId val id: String = "",
+    val ownerUid: String = "",
+    val bookTitle: String = "",
+    val bookCode: String = "",
+    val author: String = "",
+    val borrowerDocId: String = "",
+    val borrowerUserId: String = "",
+    val borrowerName: String = "",
+    val borrowerRole: String = "STUDENT", // STUDENT | TEACHER | FEE_MANAGER | LIBRARIAN | ADMIN
+    val borrowerClassInfo: String = "",
+    val issueDate: String = "",
+    val dueDate: String = "",
+    val returnedDate: String = "",
+    val status: String = "ISSUED", // ISSUED | RETURNED
+    val issuedBy: String = "",
+    val notes: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null,
 )

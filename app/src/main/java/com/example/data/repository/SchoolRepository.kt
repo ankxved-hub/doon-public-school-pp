@@ -142,6 +142,7 @@ class SchoolRepository(private val dbOrNull: FirebaseFirestore?) {
     fun observeCraftLikes(): Flow<List<CraftLike>> = observeCollection("craftLikes", CraftLike::class.java)
     fun observeCampusPosters(): Flow<List<CampusPoster>> = observeCollection("campusPosters", CampusPoster::class.java)
     fun observeTimetables(): Flow<List<ClassTimetable>> = observeCollection("timetables", ClassTimetable::class.java)
+    fun observeLibraryIssues(): Flow<List<LibraryIssue>> = observeCollection("libraryIssues", LibraryIssue::class.java)
 
     suspend fun isCurrentMemberReady(): Boolean {
         val uid = authOrNull?.currentUser?.uid ?: return false
@@ -181,6 +182,64 @@ class SchoolRepository(private val dbOrNull: FirebaseFirestore?) {
         val matchedRole = ticketSnap.getString("role").orEmpty()
         require(schoolUserDocId.isNotBlank() && matchedRole == role) {
             "Credential ticket mismatch. Please try again."
+        }
+
+        val memberRef = col("members").document(uid)
+        val existingMember = memberRef.get().await()
+        if (!existingMember.exists()) {
+            memberRef.set(
+                mapOf(
+                    "ownerUid" to uid,
+                    "schoolUserDocId" to schoolUserDocId,
+                    "role" to matchedRole,
+                    "loginTicketId" to ticketId,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            ).await()
+        } else {
+            memberRef.update(
+                mapOf(
+                    "schoolUserDocId" to schoolUserDocId,
+                    "role" to matchedRole,
+                    "loginTicketId" to ticketId,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            ).await()
+        }
+
+        val userSnap = col("users").document(schoolUserDocId).get().await()
+        val loadedUser = userSnap.toObject(SchoolUser::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            ?: throw IllegalStateException("School account profile was not found.")
+        val baseRole = loadedUser.primaryRole.ifBlank { loadedUser.role }
+        loadedUser.copy(
+            role = matchedRole,
+            primaryRole = baseRole,
+            roles = (listOf(baseRole) + loadedUser.roles + loadedUser.extraRoles).distinct(),
+        )
+    }.onFailure { e ->
+        if (e is CancellationException) throw e
+        if (e is FirebaseFirestoreException) {
+            handleFirestoreError(e, OperationType.GET, "schools/$schoolId/loginIndex")
+        }
+    }
+
+    fun buildLoginTicketId(role: String, userId: String, password: String): String =
+        computeLoginTicketId(role, userId, password)
+
+    suspend fun loginWithSavedTicket(ticketId: String): Result<SchoolUser> = runCatching {
+        val uid = requireUserId()
+        require(ticketId.isNotBlank()) { "Saved session ticket is missing. Please sign in again." }
+        ensureSchoolInitialized().getOrThrow()
+
+        val ticketSnap = col("loginIndex").document(ticketId).get().await()
+        if (!ticketSnap.exists()) {
+            throw IllegalArgumentException("Saved session expired or password changed. Please sign in again.")
+        }
+        val schoolUserDocId = ticketSnap.getString("schoolUserDocId").orEmpty()
+        val matchedRole = ticketSnap.getString("role").orEmpty()
+        require(schoolUserDocId.isNotBlank() && matchedRole.isNotBlank()) {
+            "Saved session ticket is no longer valid."
         }
 
         val memberRef = col("members").document(uid)
@@ -1527,5 +1586,118 @@ class SchoolRepository(private val dbOrNull: FirebaseFirestore?) {
     }.onFailure { e ->
         if (e is CancellationException) throw e
         handleFirestoreError(e, OperationType.WRITE, "schools/$schoolId/craftLikes")
+    }
+
+    // --- Library Management ---
+
+    suspend fun issueLibraryBook(issue: LibraryIssue): Result<String> = runCatching {
+        val uid = requireUserId()
+        val docRef = col("libraryIssues").document()
+        docRef.set(
+            issue.copy(
+                id = "",
+                ownerUid = uid,
+                bookTitle = issue.bookTitle.trim().take(160),
+                bookCode = issue.bookCode.trim().take(60),
+                author = issue.author.trim().take(100),
+                borrowerDocId = issue.borrowerDocId.trim().take(128),
+                borrowerUserId = issue.borrowerUserId.trim().take(40),
+                borrowerName = issue.borrowerName.trim().take(100),
+                borrowerRole = issue.borrowerRole.trim().ifBlank { "STUDENT" },
+                borrowerClassInfo = issue.borrowerClassInfo.trim().take(60),
+                issueDate = issue.issueDate.trim().ifBlank { SchoolCatalog.todayIso() }.take(20),
+                dueDate = issue.dueDate.trim().ifBlank { SchoolCatalog.isoDaysFromToday(14) }.take(20),
+                returnedDate = "",
+                status = "ISSUED",
+                issuedBy = issue.issuedBy.trim().take(100),
+                notes = issue.notes.trim().take(300),
+                createdAt = null,
+                updatedAt = null,
+            )
+        ).await()
+        docRef.id
+    }.onFailure { e ->
+        if (e is CancellationException) throw e
+        handleFirestoreError(e, OperationType.CREATE, "schools/$schoolId/libraryIssues")
+    }
+
+    suspend fun returnLibraryBook(issueId: String): Result<Unit> = runCatching {
+        requireUserId()
+        col("libraryIssues").document(issueId).update(
+            mapOf(
+                "status" to "RETURNED",
+                "returnedDate" to SchoolCatalog.todayIso(),
+                "updatedAt" to FieldValue.serverTimestamp(),
+            )
+        ).await()
+        Unit
+    }.onFailure { e ->
+        if (e is CancellationException) throw e
+        handleFirestoreError(e, OperationType.UPDATE, "schools/$schoolId/libraryIssues/$issueId")
+    }
+
+    // --- Automated Parent Absence Notice ---
+
+    suspend fun upsertAbsenceNoticeForStudent(
+        student: SchoolUser,
+        date: String,
+        markedByName: String,
+        senderRole: String,
+    ): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        val docId = safeDocId("abs_${date}_${student.id}")
+        val parentLabel = student.parentName.ifBlank { "Parent / Guardian" }
+        val title = "Absence Notice: ${student.fullName} ($date)".take(150)
+        val content = "Dear $parentLabel, your ward ${student.fullName} (${student.className}-${student.section}, Roll/ID ${student.userId}) was marked ABSENT on $date by $markedByName. If your ward is on leave, please submit a leave application in the app or contact the school office."
+        val docRef = col("circulars").document(docId)
+        val existing = docRef.get().await()
+        if (!existing.exists()) {
+            docRef.set(
+                Circular(
+                    id = "",
+                    ownerUid = uid,
+                    title = title,
+                    category = "Absence Alert",
+                    audience = "Parent of ${student.fullName}",
+                    targetWing = student.wing,
+                    targetClass = student.className,
+                    targetSection = student.section,
+                    date = date,
+                    content = content,
+                    postedBy = markedByName.ifBlank { "Class Teacher" },
+                    recipientDocId = student.id,
+                    recipientName = student.fullName,
+                    senderRole = if (senderRole == "ADMIN") "ADMIN" else "TEACHER",
+                    createdAt = null,
+                    updatedAt = null,
+                )
+            ).await()
+        } else {
+            docRef.update(
+                mapOf(
+                    "title" to title,
+                    "content" to content,
+                    "postedBy" to markedByName.ifBlank { "Class Teacher" },
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            ).await()
+        }
+        Unit
+    }.onFailure { e ->
+        if (e is CancellationException) throw e
+        handleFirestoreError(e, OperationType.WRITE, "schools/$schoolId/circulars")
+    }
+
+    suspend fun removeAbsenceNoticeForStudent(studentDocId: String, date: String): Result<Unit> = runCatching {
+        requireUserId()
+        val docId = safeDocId("abs_${date}_$studentDocId")
+        val docRef = col("circulars").document(docId)
+        if (docRef.get().await().exists()) {
+            docRef.delete().await()
+        }
+        Unit
+    }.onFailure { e ->
+        if (e is CancellationException) throw e
+        handleFirestoreError(e, OperationType.DELETE, "schools/$schoolId/circulars")
     }
 }

@@ -18,8 +18,8 @@ android {
     applicationId = "com.aistudio.doonschool.dpsktq"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
-    versionName = "1.3.1"
+    versionCode = 7
+    versionName = "1.5"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

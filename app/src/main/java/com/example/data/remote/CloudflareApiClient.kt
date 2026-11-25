@@ -43,6 +43,7 @@ data class CloudflareDashboardData(
     val craftLikes: List<CraftLike>,
     val campusPosters: List<CampusPoster>,
     val timetables: List<ClassTimetable>,
+    val libraryIssues: List<LibraryIssue> = emptyList(),
 )
 
 object CloudflareApiClient {
@@ -239,6 +240,7 @@ object CloudflareApiClient {
         val craftProjects = parseList(res.optJSONArray("craftProjects"), ::parseCraftProject)
         val campusPosters = parseList(res.optJSONArray("campusPosters"), ::parseCampusPoster)
         val timetables = parseList(res.optJSONArray("timetables"), ::parseTimetable)
+        val libraryIssues = parseList(res.optJSONArray("libraryIssues"), ::parseLibraryIssue)
 
         val likedIdsArr = res.optJSONArray("likedProjectIds")
         val craftLikes = buildList {
@@ -270,6 +272,7 @@ object CloudflareApiClient {
             craftLikes = craftLikes,
             campusPosters = campusPosters,
             timetables = timetables,
+            libraryIssues = libraryIssues,
         )
     }
 
@@ -316,6 +319,7 @@ object CloudflareApiClient {
             "homework" -> "/api/homework/${URLEncoder.encode(docId, "UTF-8")}"
             "dptDaily" -> "/api/dpt-daily/${URLEncoder.encode(docId, "UTF-8")}"
             "feeItems" -> "/api/fee-items/${URLEncoder.encode(docId, "UTF-8")}"
+            "libraryIssues" -> "/api/library/${URLEncoder.encode(docId, "UTF-8")}"
             else -> throw IllegalArgumentException("Unsupported collection delete: $collectionName")
         }
         requestJson("DELETE", route, token = token)
@@ -581,6 +585,27 @@ object CloudflareApiClient {
         res.optBoolean("liked", false)
     }
 
+    suspend fun issueLibraryBook(token: String, issue: LibraryIssue): Result<Unit> = runCatching {
+        val body = JSONObject().apply {
+            put("bookTitle", issue.bookTitle.trim())
+            put("bookCode", issue.bookCode.trim())
+            put("author", issue.author.trim())
+            put("borrowerDocId", issue.borrowerDocId.trim())
+            put("borrowerUserId", issue.borrowerUserId.trim())
+            put("borrowerName", issue.borrowerName.trim())
+            put("borrowerRole", issue.borrowerRole.trim())
+            put("borrowerClassInfo", issue.borrowerClassInfo.trim())
+            put("issueDate", issue.issueDate.trim())
+            put("dueDate", issue.dueDate.trim())
+            put("notes", issue.notes.trim())
+        }
+        requestJson("POST", "/api/library/issue", body = body, token = token)
+    }
+
+    suspend fun returnLibraryBook(token: String, issueId: String): Result<Unit> = runCatching {
+        requestJson("PUT", "/api/library/${URLEncoder.encode(issueId, "UTF-8")}/return", body = JSONObject(), token = token)
+    }
+
     // --- JSON Parsing Helpers (supports both camelCase & snake_case) ---
 
     private fun JSONObject.str(camel: String, snake: String = camel, fallback: String = ""): String =
@@ -736,6 +761,8 @@ object CloudflareApiClient {
         admissionNo = o.str("admissionNo", "admission_no"),
         className = o.str("className", "class_name"),
         section = o.str("section"),
+        applicantRole = o.str("applicantRole", "applicant_role", "STUDENT"),
+        targetRole = o.str("targetRole", "target_role", "TEACHER"),
         fromDate = o.str("fromDate", "from_date"),
         toDate = o.str("toDate", "to_date"),
         reason = o.str("reason"),
@@ -892,4 +919,24 @@ object CloudflareApiClient {
             updatedAt = epochToTimestamp(o.num("updatedAt", "updated_at")),
         )
     }
+
+    private fun parseLibraryIssue(o: JSONObject): LibraryIssue = LibraryIssue(
+        id = o.str("id"),
+        bookTitle = o.str("bookTitle", "book_title"),
+        bookCode = o.str("bookCode", "book_code"),
+        author = o.str("author"),
+        borrowerDocId = o.str("borrowerDocId", "borrower_doc_id"),
+        borrowerUserId = o.str("borrowerUserId", "borrower_user_id"),
+        borrowerName = o.str("borrowerName", "borrower_name"),
+        borrowerRole = o.str("borrowerRole", "borrower_role", "STUDENT"),
+        borrowerClassInfo = o.str("borrowerClassInfo", "borrower_class_info"),
+        issueDate = o.str("issueDate", "issue_date"),
+        dueDate = o.str("dueDate", "due_date"),
+        returnedDate = o.str("returnedDate", "returned_date"),
+        status = o.str("status", fallback = "ISSUED"),
+        issuedBy = o.str("issuedBy", "issued_by"),
+        notes = o.str("notes"),
+        createdAt = epochToTimestamp(o.num("createdAt", "created_at")),
+        updatedAt = epochToTimestamp(o.num("updatedAt", "updated_at")),
+    )
 }

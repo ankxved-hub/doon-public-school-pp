@@ -3,7 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
-  role TEXT NOT NULL CHECK (role IN ('ADMIN', 'TEACHER', 'FEE_MANAGER', 'STUDENT')),
+  role TEXT NOT NULL CHECK (role IN ('ADMIN', 'TEACHER', 'FEE_MANAGER', 'LIBRARIAN', 'STUDENT')),
   user_id TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   full_name TEXT NOT NULL,
@@ -121,6 +121,8 @@ CREATE TABLE IF NOT EXISTS leaves (
   admission_no TEXT NOT NULL,
   class_name TEXT NOT NULL,
   section TEXT NOT NULL,
+  applicant_role TEXT NOT NULL DEFAULT 'STUDENT',
+  target_role TEXT NOT NULL DEFAULT 'TEACHER',
   from_date TEXT NOT NULL,
   to_date TEXT NOT NULL,
   reason TEXT NOT NULL,
@@ -131,6 +133,7 @@ CREATE TABLE IF NOT EXISTS leaves (
 
 CREATE INDEX IF NOT EXISTS idx_leaves_student ON leaves(student_doc_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_leaves_class ON leaves(class_name, section, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_leaves_target ON leaves(target_role, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS homework (
   id TEXT PRIMARY KEY,
@@ -276,3 +279,27 @@ CREATE TABLE IF NOT EXISTS admission_inquiries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_inquiries_created ON admission_inquiries(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS library_issues (
+  id TEXT PRIMARY KEY,
+  book_title TEXT NOT NULL,
+  book_code TEXT NOT NULL DEFAULT '',
+  author TEXT NOT NULL DEFAULT '',
+  borrower_doc_id TEXT NOT NULL DEFAULT '',
+  borrower_user_id TEXT NOT NULL DEFAULT '',
+  borrower_name TEXT NOT NULL,
+  borrower_role TEXT NOT NULL DEFAULT 'STUDENT',
+  borrower_class_info TEXT NOT NULL DEFAULT '',
+  issue_date TEXT NOT NULL,
+  due_date TEXT NOT NULL,
+  returned_date TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'ISSUED' CHECK (status IN ('ISSUED', 'RETURNED')),
+  issued_by TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_library_status ON library_issues(status, due_date ASC);
+CREATE INDEX IF NOT EXISTS idx_library_borrower ON library_issues(borrower_doc_id, created_at DESC);
+

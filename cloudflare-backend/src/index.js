@@ -1,7 +1,7 @@
 import { hashPassword, verifyPassword, signJwt, verifyJwt } from "./auth.js";
 
-const VALID_ROLES = new Set(["ADMIN", "TEACHER", "FEE_MANAGER", "STUDENT"]);
-const STAFF_ROLES = new Set(["ADMIN", "TEACHER", "FEE_MANAGER"]);
+const VALID_ROLES = new Set(["ADMIN", "TEACHER", "FEE_MANAGER", "LIBRARIAN", "STUDENT"]);
+const STAFF_ROLES = new Set(["ADMIN", "TEACHER", "FEE_MANAGER", "LIBRARIAN"]);
 
 function cleanStr(v, maxLen = 200) {
   return String(v ?? "").trim().slice(0, maxLen);
@@ -199,6 +199,84 @@ async function ensureInquiriesTable(db) {
     )
     .run()
     .catch(() => {});
+}
+
+async function ensureLibraryAndLeaveSchema(db) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS library_issues (
+        id TEXT PRIMARY KEY,
+        book_title TEXT NOT NULL,
+        book_code TEXT NOT NULL DEFAULT '',
+        author TEXT NOT NULL DEFAULT '',
+        borrower_doc_id TEXT NOT NULL DEFAULT '',
+        borrower_user_id TEXT NOT NULL DEFAULT '',
+        borrower_name TEXT NOT NULL,
+        borrower_role TEXT NOT NULL DEFAULT 'STUDENT',
+        borrower_class_info TEXT NOT NULL DEFAULT '',
+        issue_date TEXT NOT NULL,
+        due_date TEXT NOT NULL,
+        returned_date TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'ISSUED' CHECK (status IN ('ISSUED', 'RETURNED')),
+        issued_by TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`
+    )
+    .run()
+    .catch(() => {});
+  await db
+    .prepare("ALTER TABLE leaves ADD COLUMN applicant_role TEXT NOT NULL DEFAULT 'STUDENT'")
+    .run()
+    .catch(() => {});
+  await db
+    .prepare("ALTER TABLE leaves ADD COLUMN target_role TEXT NOT NULL DEFAULT 'TEACHER'")
+    .run()
+    .catch(() => {});
+}
+
+async function ensureLibrarianUsersConstraint(db) {
+  try {
+    const meta = await db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'")
+      .first();
+    const ddl = String(meta?.sql || "");
+    if (ddl && !ddl.includes("LIBRARIAN")) {
+      await ensureUsersExtraRolesColumn(db);
+      await db.batch([
+        db.prepare(
+          `CREATE TABLE users_new (
+            id TEXT PRIMARY KEY,
+            role TEXT NOT NULL CHECK (role IN ('ADMIN', 'TEACHER', 'FEE_MANAGER', 'LIBRARIAN', 'STUDENT')),
+            user_id TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            full_name TEXT NOT NULL,
+            phone TEXT NOT NULL DEFAULT '',
+            wing TEXT NOT NULL DEFAULT '',
+            class_name TEXT NOT NULL DEFAULT '',
+            section TEXT NOT NULL DEFAULT '',
+            subject TEXT NOT NULL DEFAULT '',
+            parent_name TEXT NOT NULL DEFAULT '',
+            monthly_tuition INTEGER NOT NULL DEFAULT 0,
+            transport_fee INTEGER NOT NULL DEFAULT 0,
+            extra_roles TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          )`
+        ),
+        db.prepare(
+          `INSERT INTO users_new (id, role, user_id, password_hash, full_name, phone, wing, class_name, section, subject, parent_name, monthly_tuition, transport_fee, extra_roles, created_at, updated_at)
+           SELECT id, role, user_id, password_hash, full_name, phone, wing, class_name, section, subject, parent_name, monthly_tuition, transport_fee, COALESCE(extra_roles, ''), created_at, updated_at FROM users`
+        ),
+        db.prepare("DROP TABLE users"),
+        db.prepare("ALTER TABLE users_new RENAME TO users"),
+        db.prepare("CREATE INDEX IF NOT EXISTS idx_users_role_class_sec ON users(role, class_name, section, user_id)"),
+      ]);
+    }
+  } catch (_) {
+    // Ignore if already migrated or unsupported in mock test env
+  }
 }
 
 async function nextStudentRollNumber(db) {
@@ -422,9 +500,10 @@ export async function handleApiRequest(request, env) {
 
     if (path === "/api/dashboard" && method === "GET") {
       await ensureDefaultGateway(db);
+      await ensureLibraryAndLeaveSchema(db);
       const gw = await db.prepare("SELECT * FROM gateway_config LIMIT 1").first();
       const circulars = await db
-        .prepare("SELECT * FROM circulars ORDER BY created_at DESC LIMIT 40")
+        .prepare("SELECT * FROM circulars ORDER BY created_at DESC LIMIT 60")
         .all();
       const posters = await db
         .prepare("SELECT * FROM campus_posters ORDER BY date DESC, created_at DESC LIMIT 15")
@@ -451,6 +530,7 @@ export async function handleApiRequest(request, env) {
       let payments = [];
       let doubts = [];
       let timetables = [];
+      let libraryIssues = [];
 
       if (actor.role === "ADMIN") {
         const search = cleanStr(url.searchParams.get("search") || "", 60).toLowerCase();
@@ -470,20 +550,23 @@ export async function handleApiRequest(request, env) {
         if (clauses.length > 0) {
           uSql += " WHERE " + clauses.join(" AND ");
         }
-        uSql += " ORDER BY created_at DESC LIMIT 200";
+        uSql += " ORDER BY created_at DESC LIMIT 250";
         const uRes = await db.prepare(uSql).bind(...binds).all();
         users = (uRes.results || []).map(mapUserRow);
 
-        const [attRes, dailyRes, weeklyRes, feeRes, payRes, ttRes, countStudents, countTeachers, countFeeMgr, inqRes] = await Promise.all([
+        const [attRes, dailyRes, weeklyRes, feeRes, payRes, ttRes, leaveRes, libRes, countStudents, countTeachers, countFeeMgr, countLibrarians, inqRes] = await Promise.all([
           db.prepare("SELECT * FROM attendance ORDER BY updated_at DESC LIMIT 250").all(),
           db.prepare("SELECT * FROM dpt_daily ORDER BY date DESC LIMIT 120").all(),
           db.prepare("SELECT * FROM dpt_weekly ORDER BY updated_at DESC LIMIT 200").all(),
           db.prepare("SELECT * FROM fee_items ORDER BY created_at DESC LIMIT 250").all(),
           db.prepare("SELECT * FROM fee_payments ORDER BY created_at DESC LIMIT 200").all(),
           db.prepare("SELECT * FROM timetables").all(),
+          db.prepare("SELECT * FROM leaves ORDER BY created_at DESC LIMIT 150").all().catch(() => ({ results: [] })),
+          db.prepare("SELECT * FROM library_issues ORDER BY status ASC, due_date ASC, created_at DESC LIMIT 250").all().catch(() => ({ results: [] })),
           db.prepare("SELECT COUNT(*) as cnt FROM users WHERE role = 'STUDENT'").first(),
           db.prepare("SELECT COUNT(*) as cnt FROM users WHERE role = 'TEACHER'").first(),
           db.prepare("SELECT COUNT(*) as cnt FROM users WHERE role = 'FEE_MANAGER'").first(),
+          db.prepare("SELECT COUNT(*) as cnt FROM users WHERE role = 'LIBRARIAN'").first(),
           db.prepare("SELECT * FROM admission_inquiries ORDER BY created_at DESC LIMIT 60").all().catch(() => ({ results: [] })),
         ]);
         attendance = attRes.results || [];
@@ -492,6 +575,8 @@ export async function handleApiRequest(request, env) {
         feeItems = feeRes.results || [];
         payments = payRes.results || [];
         timetables = ttRes.results || [];
+        leaves = leaveRes.results || [];
+        libraryIssues = libRes.results || [];
 
         return jsonResponse(
           {
@@ -500,6 +585,7 @@ export async function handleApiRequest(request, env) {
               totalStudents: Number(countStudents?.cnt || 0),
               totalTeachers: Number(countTeachers?.cnt || 0),
               totalFeeManagers: Number(countFeeMgr?.cnt || 0),
+              totalLibrarians: Number(countLibrarians?.cnt || 0),
             },
             gateway: mapGatewayRow(gw),
             users,
@@ -510,16 +596,18 @@ export async function handleApiRequest(request, env) {
             attendance,
             dptDaily,
             dptWeekly,
+            leaves,
             feeItems,
             payments,
             timetables,
+            libraryIssues,
             admissionInquiries: inqRes.results || [],
           },
           200,
           cors
         );
       } else if (actor.role === "TEACHER") {
-        const [uRes, dailyRes, weeklyRes, attRes, leaveRes, hwRes, markRes, doubtRes, ttRes] = await Promise.all([
+        const [uRes, dailyRes, weeklyRes, attRes, leaveRes, hwRes, markRes, doubtRes, ttRes, libRes] = await Promise.all([
           db.prepare("SELECT * FROM users WHERE role = 'STUDENT' AND class_name = ? AND section = ? ORDER BY user_id ASC LIMIT 120")
             .bind(classFilter, sectionFilter)
             .all(),
@@ -532,8 +620,8 @@ export async function handleApiRequest(request, env) {
           db.prepare("SELECT * FROM attendance WHERE class_name = ? AND section = ? ORDER BY date DESC LIMIT 200")
             .bind(classFilter, sectionFilter)
             .all(),
-          db.prepare("SELECT * FROM leaves WHERE class_name = ? AND section = ? ORDER BY created_at DESC LIMIT 80")
-            .bind(classFilter, sectionFilter)
+          db.prepare("SELECT * FROM leaves WHERE (class_name = ? AND section = ? AND COALESCE(applicant_role, 'STUDENT') = 'STUDENT') OR student_doc_id = ? ORDER BY created_at DESC LIMIT 100")
+            .bind(classFilter, sectionFilter, actor.id)
             .all(),
           db.prepare("SELECT * FROM homework WHERE class_name = ? AND section = ? ORDER BY created_at DESC LIMIT 60")
             .bind(classFilter, sectionFilter)
@@ -545,6 +633,7 @@ export async function handleApiRequest(request, env) {
           db.prepare("SELECT * FROM timetables WHERE class_name = ? AND section = ?")
             .bind(classFilter, sectionFilter)
             .all(),
+          db.prepare("SELECT * FROM library_issues ORDER BY status ASC, due_date ASC, created_at DESC LIMIT 200").all().catch(() => ({ results: [] })),
         ]);
         users = (uRes.results || []).map(mapUserRow);
         dptDaily = dailyRes.results || [];
@@ -555,6 +644,7 @@ export async function handleApiRequest(request, env) {
         termMarks = markRes.results || [];
         doubts = doubtRes.results || [];
         timetables = ttRes.results || [];
+        libraryIssues = libRes.results || [];
       } else if (actor.role === "FEE_MANAGER") {
         const search = cleanStr(url.searchParams.get("search") || "", 60).toLowerCase();
         const fmClass = cleanStr(url.searchParams.get("className") || "", 30);
@@ -570,17 +660,28 @@ export async function handleApiRequest(request, env) {
           binds.push(pat, pat, pat);
         }
         const stuSql = `SELECT * FROM users WHERE ${clauses.join(" AND ")} ORDER BY user_id ASC LIMIT 200`;
-        const [uRes, feeRes, payRes] = await Promise.all([
+        const [uRes, feeRes, payRes, leaveRes] = await Promise.all([
           db.prepare(stuSql).bind(...binds).all(),
           db.prepare("SELECT * FROM fee_items ORDER BY created_at DESC LIMIT 250").all(),
           db.prepare("SELECT * FROM fee_payments ORDER BY created_at DESC LIMIT 250").all(),
+          db.prepare("SELECT * FROM leaves WHERE student_doc_id = ? ORDER BY created_at DESC LIMIT 40").bind(actor.id).all(),
         ]);
         users = (uRes.results || []).map(mapUserRow);
         feeItems = feeRes.results || [];
         payments = payRes.results || [];
+        leaves = leaveRes.results || [];
+      } else if (actor.role === "LIBRARIAN") {
+        const [uRes, libRes, leaveRes] = await Promise.all([
+          db.prepare("SELECT * FROM users ORDER BY role ASC, user_id ASC LIMIT 300").all(),
+          db.prepare("SELECT * FROM library_issues ORDER BY status ASC, due_date ASC, created_at DESC LIMIT 250").all().catch(() => ({ results: [] })),
+          db.prepare("SELECT * FROM leaves WHERE student_doc_id = ? ORDER BY created_at DESC LIMIT 40").bind(actor.id).all(),
+        ]);
+        users = (uRes.results || []).map(mapUserRow);
+        libraryIssues = libRes.results || [];
+        leaves = leaveRes.results || [];
       } else {
         // STUDENT — strictly scoped to self + own class-section (~80-150 row reads total!)
-        const [attRes, leaveRes, hwRes, dailyRes, weeklyRes, markRes, feeRes, payRes, doubtRes, ttRes] = await Promise.all([
+        const [attRes, leaveRes, hwRes, dailyRes, weeklyRes, markRes, feeRes, payRes, doubtRes, ttRes, libRes] = await Promise.all([
           db.prepare("SELECT * FROM attendance WHERE student_doc_id = ? ORDER BY date DESC LIMIT 60").bind(actor.id).all(),
           db.prepare("SELECT * FROM leaves WHERE student_doc_id = ? ORDER BY created_at DESC LIMIT 30").bind(actor.id).all(),
           db.prepare("SELECT * FROM homework WHERE class_name = ? AND section = ? ORDER BY created_at DESC LIMIT 30")
@@ -597,6 +698,10 @@ export async function handleApiRequest(request, env) {
           db.prepare("SELECT * FROM timetables WHERE class_name = ? AND section = ? LIMIT 1")
             .bind(actor.class_name, actor.section)
             .all(),
+          db.prepare("SELECT * FROM library_issues WHERE borrower_doc_id = ? OR LOWER(borrower_user_id) = LOWER(?) ORDER BY created_at DESC LIMIT 30")
+            .bind(actor.id, actor.user_id)
+            .all()
+            .catch(() => ({ results: [] })),
         ]);
         users = [mapUserRow(actor.rawRow, actor.role)];
         attendance = attRes.results || [];
@@ -609,6 +714,7 @@ export async function handleApiRequest(request, env) {
         payments = payRes.results || [];
         doubts = doubtRes.results || [];
         timetables = ttRes.results || [];
+        libraryIssues = libRes.results || [];
       }
 
       return jsonResponse(
@@ -630,6 +736,7 @@ export async function handleApiRequest(request, env) {
           payments,
           doubts,
           timetables,
+          libraryIssues,
         },
         200,
         cors
@@ -667,8 +774,11 @@ export async function handleApiRequest(request, env) {
       if (!VALID_ROLES.has(targetRole)) {
         return jsonResponse({ error: "Invalid user role." }, 400, cors);
       }
+      if (targetRole === "LIBRARIAN") {
+        await ensureLibrarianUsersConstraint(db);
+      }
       const extraRolesList =
-        actor.role === "ADMIN" && targetRole === "TEACHER"
+        actor.role === "ADMIN" && STAFF_ROLES.has(targetRole)
           ? parseExtraRoles(body.extraRoles ?? body.roles, targetRole)
           : [];
       const extraRolesStr = extraRolesList.join(",");
@@ -998,6 +1108,7 @@ export async function handleApiRequest(request, env) {
       const records = Array.isArray(b.records) ? b.records : [b];
       const now = Date.now();
       const stmts = [];
+      let absenceNoticesSent = 0;
       for (const r of records.slice(0, 150)) {
         const date = cleanStr(r.date || todayIso(), 20);
         const cls = cleanStr(r.className, 30);
@@ -1014,9 +1125,46 @@ export async function handleApiRequest(request, env) {
             )
             .bind(id, date, cls, sec, stId, status, actor.full_name, now)
         );
+        const absNoticeId = `abs_${date}_${stId}`.replace(/[^a-zA-Z0-9_-]/g, "_");
+        if (status === "Absent") {
+          const stRow = await db.prepare("SELECT full_name, user_id, parent_name, wing, class_name, section FROM users WHERE id = ?").bind(stId).first();
+          const stName = cleanStr(stRow?.full_name || "Student", 100);
+          const parentLabel = cleanStr(stRow?.parent_name || "Parent / Guardian", 100);
+          const stClass = cleanStr(stRow?.class_name || cls, 30);
+          const stSec = cleanStr(stRow?.section || sec, 10);
+          const stRoll = cleanStr(stRow?.user_id || "", 40);
+          const title = `Absence Notice: ${stName} (${date})`.slice(0, 150);
+          const content = `Dear ${parentLabel}, your ward ${stName} (${stClass}-${stSec}${stRoll ? `, Roll/ID ${stRoll}` : ""}) was marked ABSENT on ${date} by ${actor.full_name}. If your ward is on leave, please submit a leave application in the app or contact the school office.`;
+          stmts.push(
+            db
+              .prepare(
+                `INSERT INTO circulars (id, title, category, audience, target_wing, target_class, target_section, date, content, posted_by, recipient_doc_id, recipient_name, sender_role, attachment_name, attachment_mime_type, attachment_data, created_at)
+                 VALUES (?, ?, 'Absence Alert', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', ?)
+                 ON CONFLICT(id) DO UPDATE SET title=excluded.title, content=excluded.content, posted_by=excluded.posted_by, created_at=excluded.created_at`
+              )
+              .bind(
+                absNoticeId,
+                title,
+                `Parent of ${stName}`,
+                cleanStr(stRow?.wing || "", 50),
+                stClass,
+                stSec,
+                date,
+                content,
+                actor.full_name,
+                stId,
+                stName,
+                actor.role === "ADMIN" ? "ADMIN" : "TEACHER",
+                now
+              )
+          );
+          absenceNoticesSent += 1;
+        } else if (status === "Present") {
+          stmts.push(db.prepare("DELETE FROM circulars WHERE id = ?").bind(absNoticeId));
+        }
       }
       if (stmts.length > 0) await db.batch(stmts);
-      return jsonResponse({ count: stmts.length }, 200, cors);
+      return jsonResponse({ count: records.length, absenceNoticesSent }, 200, cors);
     }
 
     if (path === "/api/homework" && method === "POST") {
@@ -1050,22 +1198,48 @@ export async function handleApiRequest(request, env) {
       return jsonResponse({ id }, 200, cors);
     }
 
-    // Leaves
+    // Leaves (Student -> Teacher; Teacher / Fee Manager / Librarian -> Admin)
     if (path === "/api/leaves" && method === "POST") {
+      await ensureLibraryAndLeaveSchema(db);
       const b = await request.json().catch(() => ({}));
       const reason = cleanStr(b.reason, 500);
       if (!reason) return jsonResponse({ error: "Leave reason required" }, 400, cors);
       const id = `lv_${crypto.randomUUID().slice(0, 12)}`;
+      const applicantRole = actor.role;
+      const targetRole = applicantRole === "STUDENT" ? "TEACHER" : "ADMIN";
       await db
-        .prepare("INSERT INTO leaves (id, student_doc_id, student_name, admission_no, class_name, section, from_date, to_date, reason, status, teacher_remark, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', '', ?)")
-        .bind(id, actor.id, actor.full_name, actor.user_id, actor.class_name, actor.section, cleanStr(b.fromDate || todayIso(), 20), cleanStr(b.toDate || todayIso(), 20), reason, Date.now())
+        .prepare(
+          `INSERT INTO leaves (id, student_doc_id, student_name, admission_no, class_name, section, applicant_role, target_role, from_date, to_date, reason, status, teacher_remark, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', '', ?)`
+        )
+        .bind(
+          id,
+          actor.id,
+          actor.full_name,
+          actor.user_id,
+          actor.class_name || applicantRole.replace("_", " "),
+          actor.section || "",
+          applicantRole,
+          targetRole,
+          cleanStr(b.fromDate || todayIso(), 20),
+          cleanStr(b.toDate || todayIso(), 20),
+          reason,
+          Date.now()
+        )
         .run();
-      return jsonResponse({ id }, 201, cors);
+      return jsonResponse({ id, applicantRole, targetRole }, 201, cors);
     }
 
     if (path.startsWith("/api/leaves/") && method === "PUT") {
+      await ensureLibraryAndLeaveSchema(db);
       if (actor.role !== "ADMIN" && actor.role !== "TEACHER") return jsonResponse({ error: "Forbidden" }, 403, cors);
       const id = cleanStr(path.slice("/api/leaves/".length), 128);
+      const existingLeave = await db.prepare("SELECT * FROM leaves WHERE id = ?").bind(id).first();
+      if (!existingLeave) return jsonResponse({ error: "Leave request not found" }, 404, cors);
+      const targetRole = String(existingLeave.target_role || "TEACHER").toUpperCase();
+      if (targetRole === "ADMIN" && actor.role !== "ADMIN") {
+        return jsonResponse({ error: "Staff leave applications can only be approved by Principal / Admin." }, 403, cors);
+      }
       const b = await request.json().catch(() => ({}));
       const status = ["Approved", "Rejected"].includes(b.status) ? b.status : "Pending";
       await db.prepare("UPDATE leaves SET status = ?, teacher_remark = ? WHERE id = ?").bind(status, cleanStr(b.remark, 300), id).run();
@@ -1383,6 +1557,93 @@ export async function handleApiRequest(request, env) {
       if (actor.role !== "ADMIN") return jsonResponse({ error: "Admin only" }, 403, cors);
       const id = cleanStr(path.slice("/api/admission-inquiries/".length), 128);
       await db.prepare("DELETE FROM admission_inquiries WHERE id = ?").bind(id).run();
+      return jsonResponse({ ok: true }, 200, cors);
+    }
+
+    // Library Management (Librarian, Teacher, Admin)
+    if (path === "/api/library/issue" && method === "POST") {
+      await ensureLibraryAndLeaveSchema(db);
+      if (!["LIBRARIAN", "TEACHER", "ADMIN"].includes(actor.role)) {
+        return jsonResponse({ error: "Only Librarian, Teacher, or Admin can issue library books." }, 403, cors);
+      }
+      const b = await request.json().catch(() => ({}));
+      const bookTitle = cleanStr(b.bookTitle, 160);
+      if (!bookTitle) return jsonResponse({ error: "Book title is required." }, 400, cors);
+
+      let borrowerDocId = cleanStr(b.borrowerDocId, 128);
+      let borrowerUserId = cleanStr(b.borrowerUserId, 40);
+      let borrowerName = cleanStr(b.borrowerName, 100);
+      let borrowerRole = cleanStr(b.borrowerRole || "STUDENT", 30).toUpperCase();
+      let borrowerClassInfo = cleanStr(b.borrowerClassInfo, 60);
+
+      if (!borrowerDocId && borrowerUserId) {
+        const matched = await db.prepare("SELECT * FROM users WHERE LOWER(user_id) = LOWER(?) LIMIT 1").bind(borrowerUserId).first();
+        if (matched) {
+          borrowerDocId = matched.id;
+          borrowerUserId = matched.user_id;
+          borrowerName = matched.full_name;
+          borrowerRole = matched.role;
+          borrowerClassInfo = matched.class_name ? `${matched.class_name}-${matched.section}` : matched.role.replace("_", " ");
+        }
+      } else if (borrowerDocId && !borrowerName) {
+        const matched = await db.prepare("SELECT * FROM users WHERE id = ? LIMIT 1").bind(borrowerDocId).first();
+        if (matched) {
+          borrowerUserId = matched.user_id;
+          borrowerName = matched.full_name;
+          borrowerRole = matched.role;
+          borrowerClassInfo = matched.class_name ? `${matched.class_name}-${matched.section}` : matched.role.replace("_", " ");
+        }
+      }
+      if (!borrowerName) return jsonResponse({ error: "Borrower name or ID is required." }, 400, cors);
+
+      const id = `lib_${crypto.randomUUID().slice(0, 12)}`;
+      const now = Date.now();
+      await db
+        .prepare(
+          `INSERT INTO library_issues (id, book_title, book_code, author, borrower_doc_id, borrower_user_id, borrower_name, borrower_role, borrower_class_info, issue_date, due_date, returned_date, status, issued_by, notes, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 'ISSUED', ?, ?, ?, ?)`
+        )
+        .bind(
+          id,
+          bookTitle,
+          cleanStr(b.bookCode, 60),
+          cleanStr(b.author, 100),
+          borrowerDocId,
+          borrowerUserId,
+          borrowerName,
+          borrowerRole,
+          borrowerClassInfo,
+          cleanStr(b.issueDate || todayIso(), 20),
+          cleanStr(b.dueDate || todayIso(), 20),
+          actor.full_name,
+          cleanStr(b.notes, 300),
+          now,
+          now
+        )
+        .run();
+      return jsonResponse({ id }, 201, cors);
+    }
+
+    if (path.startsWith("/api/library/") && path.endsWith("/return") && method === "PUT") {
+      await ensureLibraryAndLeaveSchema(db);
+      if (!["LIBRARIAN", "TEACHER", "ADMIN"].includes(actor.role)) {
+        return jsonResponse({ error: "Only Librarian, Teacher, or Admin can mark books returned." }, 403, cors);
+      }
+      const id = cleanStr(path.slice("/api/library/".length, -"/return".length), 128);
+      await db
+        .prepare("UPDATE library_issues SET status = 'RETURNED', returned_date = ?, updated_at = ? WHERE id = ?")
+        .bind(todayIso(), Date.now(), id)
+        .run();
+      return jsonResponse({ ok: true, returnedDate: todayIso() }, 200, cors);
+    }
+
+    if (path.startsWith("/api/library/") && method === "DELETE") {
+      await ensureLibraryAndLeaveSchema(db);
+      if (!["LIBRARIAN", "ADMIN"].includes(actor.role)) {
+        return jsonResponse({ error: "Only Librarian or Admin can delete library records." }, 403, cors);
+      }
+      const id = cleanStr(path.slice("/api/library/".length), 128);
+      await db.prepare("DELETE FROM library_issues WHERE id = ?").bind(id).run();
       return jsonResponse({ ok: true }, 200, cors);
     }
 

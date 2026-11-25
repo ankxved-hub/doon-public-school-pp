@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,7 +30,9 @@ import com.example.BuildConfig
 import com.example.R
 import com.example.data.model.SchoolCatalog
 import com.example.data.model.SchoolInfo
+import com.example.data.preferences.SavedAccountEntry
 import com.example.ui.components.AppUpdateBannerCard
+import com.example.ui.components.SavedAccountsQuickLoginCard
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.AppUpdateState
 import kotlinx.coroutines.launch
@@ -55,6 +58,10 @@ fun SchoolRoleLoginScreen(
     appUpdateState: AppUpdateState = AppUpdateState.Idle,
     onCheckForUpdate: () -> Unit = {},
     onInstallUpdate: ((String) -> Unit)? = null,
+    savedAccounts: List<SavedAccountEntry> = emptyList(),
+    isSwitchingAccount: Boolean = false,
+    onQuickSwitchAccount: (SavedAccountEntry) -> Unit = {},
+    onRemoveSavedAccount: (SavedAccountEntry) -> Unit = {},
     onShowMessage: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -150,6 +157,15 @@ fun SchoolRoleLoginScreen(
                         onInstallClick = onInstallUpdate,
                     )
                 }
+            }
+
+            if (savedAccounts.isNotEmpty() && !needsCloudflareAdminSetup) {
+                SavedAccountsQuickLoginCard(
+                    savedAccounts = savedAccounts,
+                    isSwitching = isSwitchingAccount,
+                    onQuickSwitch = onQuickSwitchAccount,
+                    onRemoveAccount = onRemoveSavedAccount,
+                )
             }
 
             // Login Card
@@ -365,12 +381,15 @@ fun SchoolRoleLoginScreen(
 
                     Text("STEP 1: SELECT YOUR ROLE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         listOf(
                             Triple("STUDENT", "Student", Icons.Filled.School),
                             Triple("TEACHER", "Teacher", Icons.Filled.Person),
+                            Triple("LIBRARIAN", "Librarian", Icons.Filled.LocalLibrary),
                             Triple("FEE_MANAGER", "Accounts", Icons.Filled.AccountBalanceWallet),
                             Triple("ADMIN", "Principal", Icons.Filled.AdminPanelSettings),
                         ).forEach { (roleKey, label, icon) ->
@@ -380,7 +399,7 @@ fun SchoolRoleLoginScreen(
                                 shape = RoundedCornerShape(12.dp),
                                 border = BorderStroke(1.dp, if (active) GoldAmber else MaterialTheme.colorScheme.outline),
                                 modifier = Modifier
-                                    .weight(1f)
+                                    .widthIn(min = 78.dp)
                                     .heightIn(min = 56.dp)
                                     .clickable {
                                         selectedRole = roleKey
@@ -389,7 +408,7 @@ fun SchoolRoleLoginScreen(
                                     .testTag("role_chip_$roleKey"),
                             ) {
                                 Column(
-                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 8.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     verticalArrangement = Arrangement.Center,
                                 ) {
@@ -416,6 +435,7 @@ fun SchoolRoleLoginScreen(
                                 when (selectedRole) {
                                     "STUDENT" -> "Roll / Admission No"
                                     "TEACHER" -> "Employee ID"
+                                    "LIBRARIAN" -> "Librarian ID"
                                     "FEE_MANAGER" -> "Staff ID"
                                     else -> "Admin ID"
                                 }
@@ -426,6 +446,7 @@ fun SchoolRoleLoginScreen(
                                 when (selectedRole) {
                                     "STUDENT" -> "Enter Roll / Admission No (e.g. 001 or DPS2026-001)"
                                     "TEACHER" -> "Enter Teacher ID (e.g. TCH101)"
+                                    "LIBRARIAN" -> "Enter Librarian ID (e.g. LIB301)"
                                     "FEE_MANAGER" -> "Enter Accounts ID (e.g. FEE201)"
                                     else -> "Enter Principal Admin ID (e.g. ADMIN01)"
                                 }
